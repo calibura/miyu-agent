@@ -176,6 +176,7 @@ async fn multi_mention_tool_overrides_automatic_mention_without_sending_an_extra
         quote: true,
         mention: true,
         explicit_mention_user_ids: Vec::new(),
+    mention_all: false,
     }));
     let mut registry = miyu_engine::tools::ToolRegistry::new();
     register_platform_tools(&mut registry, context.clone());
@@ -203,6 +204,7 @@ async fn multi_mention_tool_overrides_automatic_mention_without_sending_an_extra
             quote: true,
             mention: false,
             explicit_mention_user_ids: vec!["30000".to_string(), "40000".to_string()],
+        mention_all: false,
         })
     );
 
@@ -222,6 +224,7 @@ async fn multi_mention_tool_overrides_automatic_mention_without_sending_an_extra
             quote: true,
             mention: false,
             explicit_mention_user_ids: vec!["30000".to_string(), "40000".to_string()],
+        mention_all: false,
         })
     );
 }
@@ -239,6 +242,7 @@ async fn multi_mention_tool_preserves_the_adaptive_quote_policy() {
             quote: true,
             mention: true,
             explicit_mention_user_ids: Vec::new(),
+        mention_all: false,
         }),
         AdaptiveResponseTargetPolicy::new(None, Instant::now(), 1, 0),
     );
@@ -257,6 +261,7 @@ async fn multi_mention_tool_preserves_the_adaptive_quote_policy() {
             quote: true,
             mention: true,
             explicit_mention_user_ids: Vec::new(),
+        mention_all: false,
         }),
         AdaptiveResponseTargetPolicy::new(None, Instant::now(), 1, 0),
     );
@@ -275,6 +280,7 @@ async fn multi_mention_tool_preserves_the_adaptive_quote_policy() {
             quote: false,
             mention: false,
             explicit_mention_user_ids: vec!["30000".to_string()],
+        mention_all: false,
         })
     );
 }

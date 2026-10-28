@@ -11,6 +11,7 @@ impl ResponseTarget {
             quote: true,
             mention: false,
             explicit_mention_user_ids: Vec::new(),
+            mention_all: false,
         }
     }
 }

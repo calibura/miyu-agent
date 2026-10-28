@@ -292,6 +292,7 @@ impl PlatformTurnContext {
                     quote: false,
                     mention: false,
                     explicit_mention_user_ids: mentions,
+                    mention_all: false,
                 },
                 policy: None,
             }),
@@ -316,9 +317,33 @@ impl PlatformTurnContext {
                     quote: false,
                     mention: false,
                     explicit_mention_user_ids: user_ids,
+                    mention_all: false,
                 },
                 policy: None,
             });
+        }
+    }
+
+    /// 下一条出站消息 @ 全体成员。与 `set_explicit_response_mentions` 同一张
+    /// pending 表:两者可以叠加(先 @ 全体、再补几个具体的人)。
+    pub(crate) fn set_response_mention_all(&self) {
+        let mut pending = self.response_target.lock().unwrap();
+        match pending.as_mut() {
+            Some(pending) => pending.target.mention_all = true,
+            None => {
+                *pending = Some(PendingResponseTarget {
+                    target: ResponseTarget {
+                        message_id: String::new(),
+                        message_seq: None,
+                        user_id: String::new(),
+                        quote: false,
+                        mention: false,
+                        explicit_mention_user_ids: Vec::new(),
+                        mention_all: true,
+                    },
+                    policy: None,
+                });
+            }
         }
     }
 

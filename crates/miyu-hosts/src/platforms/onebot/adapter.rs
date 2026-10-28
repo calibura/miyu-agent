@@ -67,6 +67,13 @@ pub(in crate::platforms::onebot) fn prepend_response_target(
         segments.insert(index, text_segment(" "));
         index += 1;
     }
+    // `@全体成员` 是 `at` 段里 `qq=all` 的约定写法(OneBot v11 与 NapCat /
+    // SnowLuma / LLOneBot 一致)。放在具体 @ 之后:先点名再喊全体,读起来更顺。
+    if target.mention_all {
+        segments.insert(index, json!({ "type": "at", "data": { "qq": "all" } }));
+        index += 1;
+        segments.insert(index, text_segment(" "));
+    }
 }
 
 impl PlatformAdapter for OneBotAdapter {

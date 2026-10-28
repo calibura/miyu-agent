@@ -553,6 +553,7 @@ pub(in crate::platforms::plugins::real_context) fn response_target(
         quote: settings.reply_target_quote_enable,
         mention: settings.reply_target_mention_enable,
         explicit_mention_user_ids: Vec::new(),
+        mention_all: false,
     };
     target.is_effective().then_some(target)
 }

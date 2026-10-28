@@ -94,6 +94,10 @@ pub struct ResponseTarget {
     pub quote: bool,
     pub mention: bool,
     pub explicit_mention_user_ids: Vec<String>,
+    /// `@全体成员`。只在群聊里有意义,且受平台配额约束(QQ 每群每天有限次数),
+    /// 所以单独一个位而不是塞进 `explicit_mention_user_ids`——后者每个 id 都会
+    /// 生成一个 `at` 段,`all` 不是 QQ 号。
+    pub mention_all: bool,
 }
 
 impl ResponseTarget {
@@ -111,6 +115,7 @@ impl ResponseTarget {
             quote: false,
             mention: false,
             explicit_mention_user_ids: Vec::new(),
+            mention_all: false,
         }
     }
 
@@ -128,6 +133,11 @@ pub enum PlatformInboundEventKind {
     GroupBan,
     GroupDecrease,
     GroupFileUpload,
+    /// 机器人账号自己的上下线(`notice_type=bot_status`)。用来感知掉线/被踢,
+    /// 而不是靠 WS 断开去猜。
+    BotStatus,
+    /// 有人被拉进群 / 自己主动退群以外的成员变动(`group_increase`)。
+    GroupIncrease,
 }
 
 /// Receive-time counters for one message in its transport conversation.

@@ -19,6 +19,7 @@ pub fn register(
 ) {
     if context.conversation.kind == ConversationKind::Group {
         register_mention(registry, context.clone());
+        register_at_all(registry, context.clone());
     }
     register_usage_query(registry, context.clone());
     // 主动出图(用户 09-22)。这里先装一份**不带附件清单**的:常规工具面每轮都
@@ -232,6 +233,39 @@ fn register_mention(registry: &mut ToolRegistry, context: Arc<PlatformTurnContex
         .writes()
         .with_display_name(miyu_base::i18n::text("Mention group members", "@群成员")),
     );
+}
+
+fn register_at_all(registry: &mut ToolRegistry, context: Arc<PlatformTurnContext>) {
+    registry.register(
+        ToolSpec::new(
+            "qq_mention_all",
+            "@-mention every member of this group chat in the next outgoing message. Use this only for something the whole group genuinely needs (an announcement, a roll call); it is a scarce quota on QQ — a handful per day — and it notifies hundreds of people. Check the remaining quota first with the SnowLuma script tool (get_group_at_all_remain) when unsure. This tool does not send a separate message.",
+            json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+            move |_arguments| {
+                let context = context.clone();
+                async move { mention_all(&context).await }
+            },
+        )
+        .writes()
+        .with_display_name(miyu_base::i18n::text("Mention everyone", "@全体成员")),
+    );
+}
+
+async fn mention_all(context: &PlatformTurnContext) -> Result<String> {
+    if context.conversation.kind != ConversationKind::Group {
+        bail!("mentioning everyone is only available in a group conversation");
+    }
+    context.set_response_mention_all();
+    Ok(json!({
+        "ok": true,
+        "conversation": context.conversation.scope_key(),
+        "message": "The next outgoing message will @ every member. Write that message normally, and keep it worth waking everyone for."
+    })
+    .to_string())
 }
 
 async fn mention(arguments: Value, context: &PlatformTurnContext) -> Result<String> {

@@ -234,6 +234,7 @@ fn adaptive_response_target_uses_independent_inclusive_boundaries() {
         quote: true,
         mention: true,
         explicit_mention_user_ids: Vec::new(),
+    mention_all: false,
     };
     let policy = AdaptiveResponseTargetPolicy::new(Some(start), now, 5, 15);
 
@@ -305,6 +306,7 @@ fn adaptive_response_target_mention_uses_known_message_activity() {
         quote: false,
         mention: true,
         explicit_mention_user_ids: Vec::new(),
+    mention_all: false,
     };
     let policy = AdaptiveResponseTargetPolicy::new(Some(start), now, 5, 15);
     let same_sender_message = PlatformMessagePosition {
@@ -451,6 +453,7 @@ async fn response_target_is_consumed_once_and_survives_primary_fallback() {
         quote: true,
         mention: true,
         explicit_mention_user_ids: Vec::new(),
+    mention_all: false,
     };
     context.set_response_target(Some(target.clone()));
 
@@ -523,6 +526,7 @@ fn failed_older_send_merges_mentions_into_a_newer_response_target() {
             quote: true,
             mention: true,
             explicit_mention_user_ids: Vec::new(),
+        mention_all: false,
         }),
         AdaptiveResponseTargetPolicy::new(None, Instant::now(), 1, 1),
     );
@@ -538,6 +542,7 @@ fn failed_older_send_merges_mentions_into_a_newer_response_target() {
             quote: true,
             mention: false,
             explicit_mention_user_ids: vec!["30000".to_string()],
+        mention_all: false,
         })
     );
 }
@@ -563,6 +568,7 @@ async fn adaptive_response_target_is_identical_on_primary_and_fallback() {
         quote: true,
         mention: true,
         explicit_mention_user_ids: Vec::new(),
+    mention_all: false,
     };
     context.set_adaptive_response_target(
         Some(target.clone()),
@@ -796,6 +802,7 @@ fn a_reply_right_after_my_own_message_still_quotes() {
         quote: true,
         mention: true,
         explicit_mention_user_ids: Vec::new(),
+    mention_all: false,
     };
     // 阈值 5 条,实际一条没隔;时间也没到 → 原本两条线索都会哑火。
     let policy = AdaptiveResponseTargetPolicy::new(Some(start), now, 5, 15);
@@ -876,6 +883,7 @@ async fn a_reply_marked_plain_drops_the_quote_and_the_mention() {
             quote: true,
             mention: true,
             explicit_mention_user_ids: Vec::new(),
+        mention_all: false,
         }));
         if plain {
             context.send_without_reply_cues();
