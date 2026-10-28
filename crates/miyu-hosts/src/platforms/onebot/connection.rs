@@ -739,6 +739,36 @@ pub(in crate::platforms::onebot) async fn connection_loop(
             tokio::spawn(async move {
                 handle_group_management_notice(state, handle, frame).await;
             });
+        } else if is_poke_notice(&frame) {
+            let connection_permit = match permits.clone().try_acquire_owned() {
+                Ok(permit) => permit,
+                Err(_) => {
+                    tracing::warn!(target: "miyu::qq",
+                        self_id = bound_self_id,
+                        "{}",
+                        t("OneBot connection concurrency is full; dropping a poke notice", "OneBot 连接并发已满，丢弃戳一戳通知")
+                    );
+                    continue;
+                }
+            };
+            let state = state.clone();
+            let handle = handle.clone();
+            tokio::spawn(async move {
+                let _connection_permit = connection_permit;
+                handle_poke(state, handle, frame).await;
+            });
+        } else if is_bot_status_notice(&frame) {
+            // 纯状态记录,不占并发额度。
+            handle_bot_status(&frame);
+        } else if is_group_increase_notice(&frame) {
+            // 自己进群时把群名刷进缓存:否则新群第一条消息带着空群名。
+            if let Some(inbound) = group_increase_event(&frame) {
+                if inbound.mentioned_bot {
+                    if let Some(group_id) = frame.get("group_id").and_then(value_i64) {
+                        let _ = resolve_group_name(&handle, bound_self_id, group_id, &frame).await;
+                    }
+                }
+            }
         }
     }
 

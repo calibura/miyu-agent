@@ -14,6 +14,164 @@ fn serialize_mute_cache_tests() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
+/// 戳一戳:SnowLuma 送 `notice_type=notify, sub_type=poke`,`user_id` 是动手的
+/// 人、`target_id` 是被戳的人。改写成一条文本消息后必须仍带上原来那个发信人,
+/// 否则限流、白名单、好感度都会记到错的人头上。
+#[test]
+fn a_group_poke_becomes_a_message_from_the_poker() {
+    let event = json!({
+        "post_type": "notice",
+        "notice_type": "notify",
+        "sub_type": "poke",
+        "time": 1793026000,
+        "self_id": 10000,
+        "group_id": 130515,
+        "user_id": 29313,
+        "target_id": 10000,
+        "suffix": "拍了拍我的头",
+        "sender": { "nickname": "戳人的那个" }
+    });
+    assert!(is_poke_notice(&event), "戳一戳应被认出来");
+    let message = poke_as_message(&event).expect("poke should convert to a message");
+    assert_eq!(message["post_type"], "message");
+    assert_eq!(message["message_type"], "group");
+    assert_eq!(message["group_id"], 130515);
+    assert_eq!(message["self_id"], 10000);
+    assert_eq!(message["user_id"], 29313, "发信人必须是戳人的那个");
+    assert_eq!(message["sender"]["nickname"], "戳人的那个");
+    let text = message["raw_message"].as_str().unwrap_or_default();
+    assert!(text.contains("拍了拍我的头"), "suffix 要带进文本: {text}");
+    // 序号必须成对出现:下游按平台序号排到达顺序、定位引用与撤回,缺了整条
+    // 会被当成"悄悄消失"的消息丢掉(实测:戳了没反应就是这么来的)。
+    assert!(message.get("message_id").is_some(), "合成消息必须有 message_id");
+    assert!(
+        message.get("real_seq").and_then(|v| v.as_str()).is_some(),
+        "合成消息必须带 real_seq(字符串),否则下游丢事件"
+    );
+    // 群聊的唤醒条件只认「@我 / 引用我 / 唤醒词开头」,戳一戳三者都不满足。
+    // 合成消息必须自带一个 at 机器人自己的段,否则整条会被静默丢掉。
+    let segments = message["message"].as_array().expect("message 应是段数组");
+    let ats_self = segments.iter().any(|seg| {
+        seg.get("type").and_then(|v| v.as_str()) == Some("at")
+            && seg
+                .get("data")
+                .and_then(|d| d.get("qq"))
+                .and_then(|q| q.as_str())
+                .is_some_and(|qq| qq == "10000")
+    });
+    assert!(ats_self, "合成消息必须 @ 机器人自己,否则群聊唤醒不了");
+}
+
+/// 私聊戳没有 `group_id`,得落成私聊消息,而且 target 缺省时按动手的人算。
+#[test]
+fn a_private_poke_without_group_becomes_a_private_message() {
+    let event = json!({
+        "post_type": "notice",
+        "notice_type": "notify",
+        "sub_type": "poke",
+        "time": 1793026001,
+        "self_id": 10000,
+        "user_id": 29313,
+        "target_id": 10000
+    });
+    let message = poke_as_message(&event).expect("private poke should convert");
+    assert_eq!(message["message_type"], "private");
+    assert!(message.get("group_id").is_none(), "私聊不该带 group_id");
+    let text = message["raw_message"].as_str().unwrap_or_default();
+    assert!(text.contains("戳"), "没有 suffix 时也要说清这是一次戳: {text}");
+}
+
+/// SnowLuma 的**私聊戳**字段语义与群戳不同:`user_id` 是会话对端(机器人
+/// 自己),动手的人在 `sender_id` 里。取错了会把私聊戳当成机器人自己的消息丢掉。
+#[test]
+fn a_private_poke_takes_the_poker_from_sender_id() {
+    let event = json!({
+        "post_type": "notice",
+        "notice_type": "notify",
+        "sub_type": "poke",
+        "time": 1793026006,
+        "self_id": 1667519583i64,
+        "user_id": 1667519583i64,
+        "sender_id": 2290154072i64,
+        "target_id": 1667519583i64,
+        "suffix": ""
+    });
+    assert_eq!(poke_poker_id(&event), Some(2290154072i64), "动手的人是 sender_id");
+    let message = poke_as_message(&event).expect("private poke should convert");
+    assert_eq!(message["message_type"], "private");
+    assert_eq!(
+        message["user_id"], 2290154072i64,
+        "发信人必须是戳人的那个,不是会话对端"
+    );
+}
+
+/// `notice_type=poke` 是少数实现的变体,也要认。
+#[test]
+fn the_bare_poke_notice_type_is_also_accepted() {
+    let event = json!({
+        "post_type": "notice",
+        "notice_type": "poke",
+        "time": 1793026002,
+        "self_id": 10000,
+        "user_id": 29313,
+        "target_id": 10000
+    });
+    assert!(is_poke_notice(&event));
+}
+
+/// 账号上下线:被踢下线仍然是 `bot_offline`,SnowLuma 的常规上下线是 `bot_status`。
+#[test]
+fn bot_status_and_bot_offline_are_both_recognised() {
+    for notice_type in ["bot_status", "bot_offline"] {
+        let event = json!({
+            "post_type": "notice",
+            "notice_type": notice_type,
+            "sub_type": "offline",
+            "self_id": 10000,
+            "time": 1793026003
+        });
+        assert!(is_bot_status_notice(&event), "{notice_type} 应被认出来");
+    }
+    let message = json!({
+        "post_type": "message",
+        "message_type": "group",
+        "self_id": 10000,
+        "user_id": 29313,
+        "group_id": 130515
+    });
+    assert!(!is_bot_status_notice(&message), "普通消息不该被当成上下线");
+}
+
+/// 群成员增加:自己进群时 `mentioned_bot` 为真,用来触发群名刷新。
+#[test]
+fn a_group_increase_marks_self_joins() {
+    let self_join = json!({
+        "post_type": "notice",
+        "notice_type": "group_increase",
+        "sub_type": "approve",
+        "time": 1793026004,
+        "self_id": 10000,
+        "group_id": 130515,
+        "user_id": 10000,
+        "operator_id": 29313
+    });
+    assert!(is_group_increase_notice(&self_join));
+    let inbound = group_increase_event(&self_join).expect("group increase should parse");
+    assert!(inbound.mentioned_bot, "自己进群应标记为与自己相关");
+    assert_eq!(inbound.operator_id.as_deref(), Some("29313"));
+
+    let other_join = json!({
+        "post_type": "notice",
+        "notice_type": "group_increase",
+        "time": 1793026005,
+        "self_id": 10000,
+        "group_id": 130515,
+        "user_id": 29313
+    });
+    let inbound = group_increase_event(&other_join).expect("other joins should parse too");
+    assert!(!inbound.mentioned_bot, "别人进群与自己无关");
+}
+
 #[test]
 fn group_upload_notice_becomes_a_file_history_event() {
     let event = json!({

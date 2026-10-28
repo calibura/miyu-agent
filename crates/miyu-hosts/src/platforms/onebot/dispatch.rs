@@ -145,6 +145,15 @@ pub(in crate::platforms::onebot) async fn handle_message_with_activity(
     let config = app_config.platforms.qq.clone();
     let admission = admission_for_with_state(&config, &state.state_store, target, self_id, user_id);
     if !admission.allowed {
+        // warn 而不是 info：这是「消息被丢了」，用户排查「为什么她不理我」时
+        // 第一眼要能看到。只在真的被拒时打，不是热路径。
+        tracing::warn!(
+            target: "miyu::qq",
+            self_id, user_id,
+            conversation_id = target.conversation_id(),
+            "{}",
+            t("OneBot message denied by admission", "OneBot 消息被准入拒绝")
+        );
         return;
     }
     apply_admission_text_model_pool(&mut app_config, target, &admission);
@@ -162,6 +171,17 @@ pub(in crate::platforms::onebot) async fn handle_message_with_activity(
         &target.conversation_id().to_string(),
     );
     let conversation_scope = platform_conversation(target, self_id).scope_key();
+    // debug 级：每条入站消息都走这里，INFO 下是纯噪音；排查「消息卡在队列」
+    // 这类问题时开 debug 即可看到 running/queued 的实际值。
+    tracing::debug!(
+        target: "miyu::qq",
+        self_id, user_id,
+        conversation_id = target.conversation_id(),
+        running = session_limits.running,
+        queued = session_limits.queued,
+        "{}",
+        t("OneBot message entering the turn queue", "OneBot 消息进入回合队列")
+    );
     let Some(order_slot) = state.platforms.turn_order.enter(
         &conversation_scope,
         ingress_order,

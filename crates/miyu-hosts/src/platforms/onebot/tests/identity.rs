@@ -315,6 +315,7 @@ fn generated_mentions_are_ordered_deduplicated_and_separated() {
                 "456".to_string(),
                 "456".to_string(),
             ],
+            mention_all: false,
         },
     );
     assert_eq!(segments[0]["type"], "at");
@@ -326,6 +327,58 @@ fn generated_mentions_are_ordered_deduplicated_and_separated() {
     assert_eq!(segments[3]["type"], "text");
     assert_eq!(segments[3]["data"]["text"], " ");
     assert_eq!(segments[4]["data"]["text"], "正文");
+}
+
+/// `@全体成员` 走 `at` 段里 `qq="all"` 这个 OneBot 约定（NapCat / SnowLuma /
+/// LLOneBot 一致）。它必须排在具体 @ 之后——先点名再喊全体，读起来才顺。
+#[test]
+fn mention_all_appends_an_at_all_segment_after_explicit_mentions() {
+    let mut segments = vec![text_segment("正文")];
+    prepend_response_target(
+        &mut segments,
+        &ResponseTarget {
+            message_id: String::new(),
+            message_seq: None,
+            user_id: String::new(),
+            quote: false,
+            mention: false,
+            explicit_mention_user_ids: vec!["123".to_string()],
+            mention_all: true,
+        },
+    );
+    assert_eq!(segments[0]["type"], "at");
+    assert_eq!(segments[0]["data"]["qq"], "123", "具体 @ 在前");
+    assert_eq!(segments[1]["type"], "text");
+    assert_eq!(segments[2]["type"], "at");
+    assert_eq!(segments[2]["data"]["qq"], "all", "@全体成员在后");
+    assert_eq!(segments[3]["type"], "text");
+    assert_eq!(segments[4]["data"]["text"], "正文");
+}
+
+/// 没开 `mention_all` 时**不能**凭空多出一个 `at all`：这个配额每天只有个位数
+/// 次，误发一次就是几百人被打扰。
+#[test]
+fn mention_all_stays_absent_when_not_requested() {
+    let mut segments = vec![text_segment("正文")];
+    prepend_response_target(
+        &mut segments,
+        &ResponseTarget {
+            message_id: String::new(),
+            message_seq: None,
+            user_id: String::new(),
+            quote: false,
+            mention: false,
+            explicit_mention_user_ids: Vec::new(),
+            mention_all: false,
+        },
+    );
+    assert_eq!(segments.len(), 1, "没有 @ 也没有全体时应只剩正文");
+    assert!(
+        !segments
+            .iter()
+            .any(|seg| seg["type"] == "at" && seg["data"]["qq"] == "all"),
+        "不该出现 at all"
+    );
 }
 
 #[tokio::test]

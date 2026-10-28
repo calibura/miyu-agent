@@ -569,6 +569,7 @@ async fn adapter_smoke_test_sends_replies_images_and_forward_nodes() {
         quote: true,
         mention: true,
         explicit_mention_user_ids: Vec::new(),
+    mention_all: false,
     });
     let send = {
         let adapter = adapter.clone();
@@ -614,6 +615,7 @@ async fn adapter_smoke_test_sends_replies_images_and_forward_nodes() {
             quote: true,
             mention: true,
             explicit_mention_user_ids: Vec::new(),
+        mention_all: false,
         }),
         origin: OutboundOrigin::Plugin,
         metadata: Default::default(),
@@ -674,6 +676,7 @@ async fn split_replies_encode_the_response_target_only_on_the_first_frame() {
         quote: true,
         mention: true,
         explicit_mention_user_ids: Vec::new(),
+    mention_all: false,
     });
     let send = {
         let adapter = adapter.clone();
@@ -729,6 +732,7 @@ async fn split_failure_reports_that_the_response_target_was_delivered() {
         quote: false,
         mention: false,
         explicit_mention_user_ids: vec!["30000".to_string(), "40000".to_string()],
+    mention_all: false,
     });
     let send = {
         let adapter = adapter.clone();
@@ -781,6 +785,7 @@ async fn forward_marker_failure_is_reported_as_partial_delivery() {
             quote: false,
             mention: false,
             explicit_mention_user_ids: vec!["30000".to_string()],
+        mention_all: false,
         }),
         origin: OutboundOrigin::FinalReply,
         metadata: Default::default(),
@@ -841,6 +846,7 @@ async fn invalid_attachment_does_not_send_a_bare_response_marker() {
         quote: false,
         mention: false,
         explicit_mention_user_ids: vec!["30000".to_string()],
+    mention_all: false,
     });
 
     assert!(adapter.send_message(message).await.is_err());
