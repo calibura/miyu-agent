@@ -492,6 +492,10 @@ static DASH_SCRIPTS: &[(&str, &str)] = &[
         include_str!("../../../../web/dashboards.js"),
     ),
     (
+        "dash-goals.js",
+        include_str!("../../../../web/dash-goals.js"),
+    ),
+    (
         "dash-memory.js",
         include_str!("../../../../web/dash-memory.js"),
     ),

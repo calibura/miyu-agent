@@ -777,6 +777,11 @@ pub(in crate::web) fn router(state: DaemonState) -> Router {
         .route("/api/memory/reset", post(reset_memory_http))
         .route("/api/memory/reset-all", post(reset_all_memory_http))
         .route("/api/goal", post(goal_command_http))
+        .route("/api/goals", get(goals_overview_http))
+        .route(
+            "/api/goals/{session_id}/{action}",
+            post(crate::web::goals_api::goal_action_http),
+        )
         .route("/api/jobs", get(list_jobs_http))
         .route("/api/usage/stats", get(usage_stats_web))
         .route("/api/usage/details", get(usage_details_web))

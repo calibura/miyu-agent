@@ -136,6 +136,8 @@ pub const DEFAULT_MAX_GOAL_ROUNDS: i64 = 0; // 0 = 不限(09-11 移除轮数限�
 
 const GOAL_COLUMNS: &str = "session_id, goal_id, revision, objective, phase, \
      blocked_code, blocked_message, max_rounds, rounds_started, created_at, updated_at";
+/// `GOAL_COLUMNS` 的列数,给「SELECT 列 + 附加列」的语句定位附加列用。
+const GOAL_COLUMNS_COUNT: usize = 11;
 
 fn goal_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<(GoalRecord, String)> {
     let phase_raw: String = row.get(4)?;
@@ -206,6 +208,36 @@ impl ConversationDb {
     pub fn goal(&self, session_id: &str) -> Result<Option<GoalRecord>> {
         let conn = self.conn.lock().unwrap();
         load_goal(&conn, session_id)
+    }
+
+    /// 本库里所有带目标的会话,连同会话名,最近更新的在前。
+    ///
+    /// 给 WebUI 的目标总览用:一个库一个批次拿全,不用「先列会话再逐个
+    /// `goal()`」地 N+1。会话名带出来,前端不用再发一趟会话列表来对名字。
+    /// goals.session_id 外键指向 sessions,INNER JOIN 天然只留有效行。
+    pub fn goals_with_session_names(&self) -> Result<Vec<(GoalRecord, String)>> {
+        let conn = self.conn.lock().unwrap();
+        let mut statement = conn.prepare(&format!(
+            "SELECT goals.session_id, goals.goal_id, goals.revision, goals.objective,
+                    goals.phase, goals.blocked_code, goals.blocked_message,
+                    goals.max_rounds, goals.rounds_started, goals.created_at,
+                    goals.updated_at, sessions.name
+             FROM goals INNER JOIN sessions ON sessions.session_id = goals.session_id
+             ORDER BY goals.updated_at DESC"
+        ))?;
+        let rows = statement.query_map([], |row| {
+            let (mut record, phase_raw) = goal_from_row(row)?;
+            let session_name: String = row.get(GOAL_COLUMNS_COUNT)?;
+            record.phase = GoalPhase::Active; // 占位,由下面 parse 覆盖
+            Ok((record, phase_raw, session_name))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (mut record, phase_raw, session_name) = row?;
+            record.phase = GoalPhase::parse(&phase_raw)?;
+            out.push((record, session_name));
+        }
+        Ok(out)
     }
 
     /// 建目标（revision=1，phase=active）。

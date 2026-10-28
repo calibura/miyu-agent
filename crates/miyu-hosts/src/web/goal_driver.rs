@@ -163,7 +163,7 @@ pub(in crate::web) fn apply_goal_command(
 }
 
 /// 取消这个会话所有在飞的续轮 run。人类发起的回合不碰。
-fn cancel_goal_rounds_for_session(state: &DaemonState, session_id: &str) {
+pub(in crate::web) fn cancel_goal_rounds_for_session(state: &DaemonState, session_id: &str) {
     let manager = state.manager.lock().unwrap();
     for run in manager.active_runs.values() {
         if &*run.session_id == session_id

@@ -52,6 +52,22 @@ miyu config
 
 ![](./pics/webui.png)
 
+WebUI 控制台里有一块「目标」面板，跨会话列出所有正在推进的长任务目标（阶段、轮次、最近更新），可以直接暂停 / 继续 / 完成。对应的 HTTP 接口：
+
+```
+GET    /api/goals                        # 所有会话的目标总览
+POST   /api/goals/<session_id>/pause     # 暂停（带 goal_id + revision，CAS）
+POST   /api/goals/<session_id>/resume    # 继续推进
+POST   /api/goals/<session_id>/complete  # 收工
+```
+
+不进网页也能用 curl 直接管理（先登录拿 cookie）：
+
+```bash
+curl -s -b cookies.txt http://127.0.0.1:8300/api/goals
+curl -s -b cookies.txt -X POST http://127.0.0.1:8300/api/goals/<session>/pause \
+     -H 'content-type: application/json' -d '{"goal_id":"goal_xxx","revision":2}'
+```
 
 ### 接入通讯平台
 

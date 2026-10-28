@@ -341,6 +341,11 @@ impl StateStore {
         self.conv_db.goal(session_id)
     }
 
+    /// 本库所有带目标的会话,连同会话名(见 `ConversationDb::goals_with_session_names`)。
+    pub fn goals_with_session_names(&self) -> Result<Vec<(crate::state::GoalRecord, String)>> {
+        self.conv_db.goals_with_session_names()
+    }
+
     pub fn create_goal(
         &self,
         session_id: &str,

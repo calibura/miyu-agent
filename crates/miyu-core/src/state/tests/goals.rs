@@ -77,6 +77,38 @@ fn goal_lifecycle_walks_the_phases() {
     assert_eq!(done.phase, GoalPhase::Complete);
 }
 
+/// WebUI 目标总览的读侧:带会话名、按 updated_at 倒序、没目标的会话不出现。
+#[test]
+fn goals_with_session_names_lists_every_goal_with_its_session() {
+    let (_t, db, session) = db_with_session();
+    assert!(db.goals_with_session_names().unwrap().is_empty());
+
+    db.create_goal(&session, "第一个目标", None).unwrap();
+    let rows = db.goals_with_session_names().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].0.session_id, session);
+    assert_eq!(rows[0].0.objective, "第一个目标");
+    // create_session 带了名字「goal test」,总览把它带出来。
+    assert_eq!(rows[0].1, "goal test");
+
+    // 第二个会话再建一个:两行都在,顺序按 updated_at 倒序(后建的在前)。
+    let other = db
+        .create_session(
+            "miyu",
+            "另一个会话",
+            crate::state::USER_SESSION_KIND,
+            None,
+            "",
+        )
+        .unwrap();
+    db.create_goal(&other.session_id, "第二个目标", None)
+        .unwrap();
+    let rows = db.goals_with_session_names().unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].0.objective, "第二个目标");
+    assert_eq!(rows[1].0.objective, "第一个目标");
+}
+
 /// 拿着过期的 revision 改，必须被拒并告知当前版本。
 ///
 /// 这是模型自纠的唯一线索：它可能在读到目标之后、写回之前被人改过。无声覆盖
