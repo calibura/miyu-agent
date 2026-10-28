@@ -180,6 +180,10 @@ curl -s -b cookies.txt -X POST http://127.0.0.1:8300/api/goals/<session>/pause \
 
   `miyu`的默认提示词是无法修改的。你可以在`人格和功能`中新建属于自己的 AI 人格，自选需要开关的功能，还可以配置 `用户身份` 让对话更加沉浸。 
 
+- 目标进度 QQ 推送（可选）
+
+  长任务目标（goal）的自动续轮每结束一轮，可以把一句简短进度推送到 QQ 管理员：配置项 `platforms.qq.goal_progress_notify`，默认关闭；收件人是 `platforms.qq.admin_users` 的第一个。长任务一跑几十轮，不想被刷屏就保持默认。
+
 ## 搬到另一台机器
 
 `miyu export` 把当前安装打成一个 `.tar.gz`（权限 0600），`miyu import` 在新机器上还原：

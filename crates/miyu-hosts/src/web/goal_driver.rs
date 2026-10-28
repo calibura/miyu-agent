@@ -53,7 +53,13 @@ pub(in crate::web) fn spawn_goal_round_driver(state: DaemonState) {
                             goal::set_awaiting_human(&goal_session, true);
                             continue;
                         }
-                        Some(_) => {}
+                        Some((goal_session, _)) => {
+                            let state = state.clone();
+                            let session = goal_session.clone();
+                            tokio::spawn(async move {
+                                notify_goal_round_end(&state, &session).await;
+                            });
+                        }
                         // 人（或别的来源）跑完了一轮，空转等待解除。
                         None => goal::set_awaiting_human(&session, false),
                     }
@@ -352,5 +358,80 @@ pub(in crate::web) async fn maybe_continue_goal(state: DaemonState, session_id: 
         .is_err()
     {
         finish_run(&state.manager, &run_id, None);
+    }
+}
+
+/// 轮次结束后的 QQ 进度推送（10-28）。
+///
+/// 一个 goal 轮干完活时给 owner 发一句简短进度——配置
+/// `platforms.qq.goal_progress_notify`（默认关）控制开关，收件人是
+/// `platforms.qq.admin_users` 的第一个（owner 2290154072）。失败的 run
+/// 不推（事件流的 `run.failed` 分支已经解除武装并记日志，再推一条报丧的
+/// 只会刷屏）；空转轮也不推（那条路径在上面就 `continue` 了）。
+///
+/// 发送失败只记日志不重试：这是进度便条不是交付物，与定时消息同一条
+/// 「先记账再发送、错过不补」的口径。
+async fn notify_goal_round_end(state: &DaemonState, session_id: &str) {
+    let (enabled, owner) = {
+        let manager = state.manager.lock().unwrap();
+        (
+            manager.config.platforms.qq.goal_progress_notify,
+            manager.config.platforms.qq.admin_users.first().copied(),
+        )
+    };
+    if !enabled {
+        return;
+    }
+    let Some(owner) = owner else {
+        tracing::debug!("goal progress notify: no QQ admin configured; skipping");
+        return;
+    };
+    // 目标在会话所属者的库里（goals 表对 sessions 有外键）。
+    let store = state.stores.for_session(session_id).pinned(session_id);
+    let Ok(Some(goal)) = store.goal(session_id) else {
+        return;
+    };
+    let session_name = store
+        .session_record(session_id)
+        .ok()
+        .flatten()
+        .map(|record| {
+            if record.name.trim().is_empty() {
+                session_id.to_string()
+            } else {
+                record.name
+            }
+        })
+        .unwrap_or_else(|| session_id.to_string());
+    let objective: String = goal.objective.chars().take(60).collect();
+    let phase = match goal.phase {
+        miyu_core::state::GoalPhase::Complete => "已完成",
+        miyu_core::state::GoalPhase::Blocked => "受阻",
+        miyu_core::state::GoalPhase::Paused => "已暂停",
+        miyu_core::state::GoalPhase::Active => {
+            if goal::is_armed(session_id) {
+                "进行中"
+            } else {
+                "已停下"
+            }
+        }
+    };
+    let text = format!(
+        "[goal] {session_name} · {phase} · 第 {} 轮\n{objective}",
+        goal.rounds_started
+    );
+    let result = crate::platforms::onebot::send_direct_text(
+        state,
+        None,
+        "private",
+        &owner.to_string(),
+        &text,
+    )
+    .await;
+    match result {
+        Ok(()) => tracing::info!(session = %session_id, "goal progress notified"),
+        Err(error) => {
+            tracing::warn!(session = %session_id, %error, "goal progress notify failed")
+        }
     }
 }

@@ -674,6 +674,10 @@ pub struct OneBotConfig {
     pub asset_base_url: String,
     /// Replies longer than this are split into multiple messages. 0 = never split.
     pub max_reply_chars: usize,
+    /// Push a short progress note to the first admin after each goal round
+    /// ends. Off by default: long tasks run many rounds in a row.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub goal_progress_notify: bool,
     /// 睡眠时间「HH:MM-HH:MM」(本机时区,可跨午夜,如 `23:00-07:00`),空 = 不睡。
     /// 时段内只有管理员(私聊与群聊)和私聊白名单(仅私聊)的消息还会触发回合;
     /// 其余消息、文件上传、撤回、戳一戳等一律当没看见——不进历史、不概率插话。
@@ -896,6 +900,7 @@ impl Default for OneBotConfig {
             plugins: PlatformPluginsConfig::new(),
             asset_base_url: String::new(),
             max_reply_chars: 3000,
+            goal_progress_notify: false,
             sleep_hours: String::new(),
         }
     }

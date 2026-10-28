@@ -1918,6 +1918,13 @@
         default: 3000,
       },
       {
+        path: "goal_progress_notify",
+        label: t("目标进度 QQ 推送"),
+        hint: t("goal 自动续轮每轮结束后向第一个管理员私聊推送一句简短进度"),
+        kind: "toggle",
+        default: false,
+      },
+      {
         path: "user_identification",
         label: t("用户识别"),
         hint: t("把发送者稳定 id 放进系统上下文"),
