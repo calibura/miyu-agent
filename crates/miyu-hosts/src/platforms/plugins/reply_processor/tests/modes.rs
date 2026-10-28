@@ -182,6 +182,7 @@ async fn forward_mode_preserves_the_selected_response_target_without_guessing_se
         quote: true,
         mention: true,
         explicit_mention_user_ids: Vec::new(),
+    mention_all: false,
     });
 
     let prepared = plugin.before_send(&context, message).await.unwrap();
@@ -195,6 +196,7 @@ async fn forward_mode_preserves_the_selected_response_target_without_guessing_se
             quote: true,
             mention: true,
             explicit_mention_user_ids: Vec::new(),
+        mention_all: false,
         })
     );
     let OutboundBody::Forward(nodes) = prepared.primary.body else {
@@ -222,6 +224,7 @@ async fn forward_mode_keeps_explicit_mentions_in_the_regular_message() {
         quote: true,
         mention: false,
         explicit_mention_user_ids: vec!["50000".to_string(), "60000".to_string()],
+    mention_all: false,
     });
 
     let prepared = plugin.before_send(&context, message).await.unwrap();

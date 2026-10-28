@@ -224,13 +224,9 @@ impl RealContextPlugin {
         };
 
         for (message_id, reaction_id) in old_reactions {
-            self.cancel_reaction_expiration(context, &message_id, &reaction_id);
-            if let Err(error) = context
-                .set_message_reaction(&message_id, &reaction_id, false)
-                .await
-            {
-                tracing::debug!(error = %error, %message_id, "{}", miyu_base::i18n::text("superseded QQ reaction could not be removed", "无法移除已被新消息覆盖的 QQ 表情回应"));
-            }
+            // 这份列表本身就是「已经贴上去了」的凭据,不必再过 applied 表。
+            self.remove_applied_reaction(context, &message_id, &reaction_id)
+                .await;
         }
 
         // 表情包/贴图到了这里常常带一段方括号占位符(`[思索]`、`[非文本消息]`),
@@ -976,9 +972,7 @@ impl RealContextPlugin {
         if let Some(message_id) = target_message_id {
             for reaction in &settings.active_reply_reaction_emoji_ids {
                 let reaction = reaction.to_string();
-                self.cancel_reaction_expiration(context, message_id, &reaction);
-                let _ = context
-                    .set_message_reaction(message_id, &reaction, false)
+                self.remove_reaction_if_applied(context, message_id, &reaction)
                     .await;
             }
         }
@@ -1019,4 +1013,6 @@ impl RealContextPlugin {
         session.record_reply(now, settings);
         session.mark_continuation(&sender_id, now, settings);
     }
+
+
 }

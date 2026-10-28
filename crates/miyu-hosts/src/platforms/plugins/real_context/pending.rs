@@ -83,13 +83,9 @@ impl RealContextPlugin {
             }
         };
         for (message_id, reaction_id) in old_reactions {
-            self.cancel_reaction_expiration(context, &message_id, &reaction_id);
-            if let Err(error) = context
-                .set_message_reaction(&message_id, &reaction_id, false)
-                .await
-            {
-                tracing::debug!(error = %error, %message_id, "{}", miyu_base::i18n::text("superseded QQ reaction could not be removed", "无法移除已被新消息覆盖的 QQ 表情回应"));
-            }
+            // 这份列表本身就是「已经贴上去了」的凭据,不必再过 applied 表。
+            self.remove_applied_reaction(context, &message_id, &reaction_id)
+                .await;
         }
         targets.push(active_reply_target(event));
         normalize_active_targets(&mut targets, &event.sender_id);
@@ -109,6 +105,12 @@ impl RealContextPlugin {
         supersede_previous: bool,
     ) {
         let now = Instant::now();
+        // `reactions` 里的条目就是「已经贴上去了」的事实:登记进 applied 表,
+        // 之后摘除才有据可依。`add_reactions` 那条路已经登记过,这里是幂等的
+        // (也覆盖把 reactions 直接塞进 pending 的调用方)。
+        for (message_id, reaction_id) in &reactions {
+            self.mark_reaction_applied(context, message_id, reaction_id);
+        }
         let (cancel, _receiver) = tokio::sync::watch::channel(false);
         let mut runtime = self.runtime.lock().unwrap();
         runtime.next_generation = runtime.next_generation.wrapping_add(1).max(1);
@@ -157,6 +159,7 @@ impl RealContextPlugin {
                 .await
             {
                 Ok(()) => {
+                    self.mark_reaction_applied(context, &event.message_id, &reaction_id);
                     active.push((event.message_id.clone(), reaction_id.clone()));
                     let expiration = context.schedule_message_reaction_removal(
                         event.message_id.clone(),
@@ -226,13 +229,93 @@ impl RealContextPlugin {
     ) {
         for reaction in &settings.active_reply_reaction_emoji_ids {
             let reaction = reaction.to_string();
-            self.cancel_reaction_expiration(context, message_id, &reaction);
-            if let Err(error) = context
-                .set_message_reaction(message_id, &reaction, false)
-                .await
-            {
-                tracing::debug!(error = %error, %message_id, "{}", miyu_base::i18n::text("QQ reply reaction could not be removed", "无法移除 QQ 回复表情回应"));
+            // 没贴过的别摘:OneBot 会回 65003「未设置过该表情」。
+            if !self.take_reaction_applied(context, message_id, &reaction) {
+                continue;
             }
+            self.cancel_reaction_expiration(context, message_id, &reaction);
+            self.set_message_reaction_off(context, message_id, &reaction)
+                .await;
+        }
+    }
+
+    /// 记下一条「真的贴上去了」的表情,摘除路径据此判断该不该发 `set=false`。
+    pub(in crate::platforms::plugins::real_context) fn mark_reaction_applied(
+        &self,
+        context: &PlatformTurnContext,
+        message_id: &str,
+        reaction_id: &str,
+    ) {
+        self.applied_reactions.lock().unwrap().insert((
+            runtime_session_key(context),
+            message_id.to_string(),
+            reaction_id.to_string(),
+        ));
+    }
+
+    /// 认领一条待摘的表情:在表里就移除并返回 true,不在就 false(不发请求)。
+    /// 认领语义让重复摘除天然幂等。
+    pub(in crate::platforms::plugins::real_context) fn take_reaction_applied(
+        &self,
+        context: &PlatformTurnContext,
+        message_id: &str,
+        reaction_id: &str,
+    ) -> bool {
+        self.applied_reactions.lock().unwrap().remove(&(
+            runtime_session_key(context),
+            message_id.to_string(),
+            reaction_id.to_string(),
+        ))
+    }
+
+    /// 只摘真的贴过的那些,其余一个请求都不发。
+    pub(in crate::platforms::plugins::real_context) async fn remove_reaction_if_applied(
+        &self,
+        context: &PlatformTurnContext,
+        message_id: &str,
+        reaction_id: &str,
+    ) {
+        if !self.take_reaction_applied(context, message_id, reaction_id) {
+            return;
+        }
+        self.cancel_reaction_expiration(context, message_id, reaction_id);
+        self.set_message_reaction_off(context, message_id, reaction_id).await;
+    }
+
+    /// 摘除一条**已知贴过**的表情。调用方手里有 `PendingReply.reactions` 这类
+    /// 「贴上的事实」时走这条,不必再过 applied 表。
+    pub(in crate::platforms::plugins::real_context) async fn remove_applied_reaction(
+        &self,
+        context: &PlatformTurnContext,
+        message_id: &str,
+        reaction_id: &str,
+    ) {
+        self.take_reaction_applied(context, message_id, reaction_id);
+        self.cancel_reaction_expiration(context, message_id, reaction_id);
+        self.set_message_reaction_off(context, message_id, reaction_id).await;
+    }
+
+    async fn set_message_reaction_off(
+        &self,
+        context: &PlatformTurnContext,
+        message_id: &str,
+        reaction_id: &str,
+    ) {
+        if let Err(error) = context
+            .set_message_reaction(message_id, reaction_id, false)
+            .await
+        {
+            // 65003「未设置过该表情」与私聊不支持都属正常,降级成 debug 即可。
+            tracing::debug!(
+                error = %error,
+                %message_id,
+                %reaction_id,
+                "{}",
+                miyu_base::i18n::text(
+                    "platform reaction could not be removed",
+                    "无法移除平台表情回应",
+                )
+            );
         }
     }
 
@@ -366,13 +449,9 @@ impl RealContextPlugin {
                 .unwrap_or_default()
         };
         for (message_id, reaction_id) in reactions {
-            self.cancel_reaction_expiration(context, &message_id, &reaction_id);
-            if let Err(error) = context
-                .set_message_reaction(&message_id, &reaction_id, false)
-                .await
-            {
-                tracing::debug!(error = %error, %message_id, %reaction_id, "{}", miyu_base::i18n::text("cancelled QQ reaction could not be removed", "无法移除已取消的 QQ 表情回应"));
-            }
+            // 来自 `PendingReply.reactions`,已贴过。
+            self.remove_applied_reaction(context, &message_id, &reaction_id)
+                .await;
         }
     }
 }

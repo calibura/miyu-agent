@@ -237,6 +237,10 @@ impl MessageHistoryPlugin {
                     .await?;
             }
             PlatformInboundEventKind::GroupBan | PlatformInboundEventKind::GroupDecrease => {}
+            // 账号上下线、入群都不进聊天历史:它们不是「说过的话」,进了历史
+            // 只会污染检索和发言排行。
+            PlatformInboundEventKind::BotStatus
+            | PlatformInboundEventKind::GroupIncrease => {}
         }
         Ok(())
     }

@@ -147,6 +147,10 @@ async fn a_merged_followup_moves_the_reaction_and_hands_its_pending_to_the_runni
         vec![active_reply_target(&followup)],
         false,
     );
+    // 真实流程里这一轮原先的消息(`message-1`)的表情是 `add_reactions` 贴上去
+    // 的,摘除路径靠 applied 表认账。测试直接构造状态,得把这条事实补上,
+    // 否则「没贴过就别摘」的保护会(正确地)拦住这次摘除。
+    plugin.mark_reaction_applied(&running, "message-1", "289");
 
     PlatformPlugin::adopt_followup(&plugin, &running, &followup).await;
 

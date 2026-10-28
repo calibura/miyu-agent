@@ -57,6 +57,13 @@ pub(super) struct RealContextPlugin {
     runtime: Mutex<RuntimeState>,
     global_judge_gate: DynamicGate,
     reaction_expirations: Mutex<HashMap<(String, String, String), tokio::task::AbortHandle>>,
+    /// 真的贴上去过、还没摘掉的表情:`(会话键, message_id, reaction_id)`。
+    ///
+    /// 摘除路径(`finish_reply` / `after_turn_aborted`)原先只要拿到 message_id 就
+    /// 盲发一次 `set=false`,没贴过的消息也照摘,OneBot 侧回 65003「未设置过该
+    /// 表情」——实测一天 79 次无效请求,占表情类调用的大头。有了这张表,摘除只对
+    /// 表内条目发生,重复摘除也天然幂等。
+    applied_reactions: Mutex<std::collections::HashSet<(String, String, String)>>,
     affection_updates: affection::AffectionUpdateQueue,
 }
 
@@ -67,6 +74,7 @@ impl RealContextPlugin {
             runtime: Mutex::new(RuntimeState::default()),
             global_judge_gate: DynamicGate::default(),
             reaction_expirations: Mutex::new(HashMap::new()),
+            applied_reactions: Mutex::new(std::collections::HashSet::new()),
             affection_updates: affection::AffectionUpdateQueue::default(),
         }
     }
@@ -257,13 +265,9 @@ impl PlatformPlugin for RealContextPlugin {
                 (std::mem::take(&mut pending.reactions), pending.trigger)
             };
             for (message_id, reaction_id) in old_reactions {
-                self.cancel_reaction_expiration(context, &message_id, &reaction_id);
-                if let Err(error) = context
-                    .set_message_reaction(&message_id, &reaction_id, false)
-                    .await
-                {
-                    tracing::debug!(error = %error, %message_id, "{}", miyu_base::i18n::text("superseded QQ reaction could not be removed", "无法移除已被新消息覆盖的 QQ 表情回应"));
-                }
+                // 这份列表本身就是「已经贴上去了」的凭据,不必再过 applied 表。
+                self.remove_applied_reaction(context, &message_id, &reaction_id)
+                    .await;
             }
             let reactions = self.add_reactions(context, event, &settings, trigger).await;
             let mut runtime = self.runtime.lock().unwrap();
@@ -333,13 +337,9 @@ impl PlatformPlugin for RealContextPlugin {
                 }
             }
             for (message_id, reaction_id) in reactions {
-                self.cancel_reaction_expiration(context, &message_id, &reaction_id);
-                if let Err(error) = context
-                    .set_message_reaction(&message_id, &reaction_id, false)
-                    .await
-                {
-                    tracing::debug!(error = %error, %message_id, %reaction_id, "{}", miyu_base::i18n::text("aborted QQ reaction could not be removed", "无法移除已中止的 QQ 表情回应"));
-                }
+                // 只摘真贴过的:盲发 set=false 会撞 65003「未设置过该表情」。
+                self.remove_reaction_if_applied(context, &message_id, &reaction_id)
+                    .await;
             }
             Ok(())
         })
