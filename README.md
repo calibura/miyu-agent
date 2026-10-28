@@ -52,13 +52,17 @@ miyu config
 
 ![](./pics/webui.png)
 
-WebUI 控制台里有一块「目标」面板，跨会话列出所有正在推进的长任务目标（阶段、轮次、最近更新），可以直接暂停 / 继续 / 完成。对应的 HTTP 接口：
+WebUI 控制台里有一块「目标」面板，跨会话列出所有正在推进的长任务目标（阶段、轮次、最近更新），可以直接暂停 / 继续 / 完成；同面板还有一份 daemon 级待办清单，随手记、随手勾。对应的 HTTP 接口：
 
 ```
 GET    /api/goals                        # 所有会话的目标总览
 POST   /api/goals/<session_id>/pause     # 暂停（带 goal_id + revision，CAS）
 POST   /api/goals/<session_id>/resume    # 继续推进
 POST   /api/goals/<session_id>/complete  # 收工
+GET    /api/todos                        # daemon 级待办清单
+POST   /api/todos                        # 记一条 { content, priority }
+PATCH  /api/todos/<id>                   # 改状态/优先级 { status, priority }
+DELETE /api/todos/<id>                   # 删一条
 ```
 
 不进网页也能用 curl 直接管理（先登录拿 cookie）：

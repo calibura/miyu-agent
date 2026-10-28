@@ -410,6 +410,36 @@ impl StateStore {
         self.conv_db.clear_goal(session_id, goal_id, revision)
     }
 
+    // ---- daemon 级轻量待办 ----
+    //
+    // daemon 的台面账(10-28),与会话内的 todo 工具(session_values)两回事。
+    // 只在管理员的库里有意义——成员库是各人自己的台面,别串。
+
+    pub fn daemon_todos(&self) -> Result<Vec<crate::state::DaemonTodo>> {
+        self.conv_db.daemon_todos()
+    }
+
+    pub fn create_daemon_todo(
+        &self,
+        content: &str,
+        priority: &str,
+    ) -> Result<crate::state::DaemonTodo> {
+        self.conv_db.create_daemon_todo(content, priority)
+    }
+
+    pub fn update_daemon_todo(
+        &self,
+        id: i64,
+        status: Option<&str>,
+        priority: Option<&str>,
+    ) -> Result<crate::state::DaemonTodo> {
+        self.conv_db.update_daemon_todo(id, status, priority)
+    }
+
+    pub fn delete_daemon_todo(&self, id: i64) -> Result<()> {
+        self.conv_db.delete_daemon_todo(id)
+    }
+
     pub fn begin_goal_round(
         &self,
         session_id: &str,

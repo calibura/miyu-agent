@@ -8,6 +8,7 @@ mod assets;
 mod cache_breaks;
 mod compact;
 mod context_anchor;
+mod daemon_todos;
 mod goals;
 mod interrupted_replay;
 mod pages;

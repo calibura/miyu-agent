@@ -782,6 +782,14 @@ pub(in crate::web) fn router(state: DaemonState) -> Router {
             "/api/goals/{session_id}/{action}",
             post(crate::web::goals_api::goal_action_http),
         )
+        .route(
+            "/api/todos",
+            get(daemon_todos_http).post(daemon_todo_create_http),
+        )
+        .route(
+            "/api/todos/{todo_id}",
+            axum::routing::patch(daemon_todo_update_http).delete(daemon_todo_delete_http),
+        )
         .route("/api/jobs", get(list_jobs_http))
         .route("/api/usage/stats", get(usage_stats_web))
         .route("/api/usage/details", get(usage_details_web))

@@ -31,7 +31,28 @@ const NAMED_MIGRATIONS: &[NamedMigration] = &[
         id: "2026-09-26-held-job-reports",
         apply: apply_held_job_reports,
     },
+    NamedMigration {
+        id: "2026-10-28-daemon-todos",
+        apply: apply_daemon_todos,
+    },
 ];
+
+/// daemon 级轻量待办(10-28,见 `conversation_db/daemon_todos.rs`):WebUI
+/// 目标面板上那份随手记的清单。daemon 级、不分会话,也不挂 sessions 外键
+/// ——删会话不该带走它,与会话内的 todo 工具(`session_values`)互不相干。
+fn apply_daemon_todos(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS daemon_todos (
+             id           INTEGER PRIMARY KEY AUTOINCREMENT,
+             content      TEXT NOT NULL,
+             priority     TEXT NOT NULL DEFAULT 'medium',
+             status       TEXT NOT NULL DEFAULT 'open',
+             created_at   TEXT NOT NULL,
+             completed_at TEXT
+         );",
+    )?;
+    Ok(())
+}
 
 /// 平台会话里还没交出去的后台任务汇报（09-26，见 `conversation_db/held_reports.rs`）：一份一行，
 /// 按批（派它们的那一轮）取，挂会话级联删除。

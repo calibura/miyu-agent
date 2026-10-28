@@ -9431,7 +9431,10 @@ body.miyu-paused *::after {
 .dash-chip.is-builtin { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
 .dash-chip.is-ok { background: color-mix(in srgb, var(--online) 18%, transparent); color: var(--online); }
 
-/* ── 目标面板(dash-goals.js) ───────────────────────────── */
+/* ── 目标与待办面板(dash-goals.js) ─────────────────────── */
+
+.dash-goals-layout { display: grid; gap: 16px; grid-template-columns: 1.6fr 1fr; align-items: start; }
+@media (max-width: 1100px) { .dash-goals-layout { grid-template-columns: 1fr; } }
 
 .dash-card-block { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 16px; }
 .dash-card-block h3 { margin: 0 0 12px; font-size: var(--fs-sub); font-weight: 650; }
@@ -9448,6 +9451,16 @@ body.miyu-paused *::after {
 .dash-goal-objective { margin: 0; white-space: pre-wrap; word-break: break-word; color: var(--text); }
 .dash-goal-blocked { margin: 0; color: var(--danger); font-size: var(--fs-meta); }
 .dash-goal-actions { display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+
+.dash-todo-form { display: flex; gap: 8px; margin-bottom: 10px; }
+.dash-todo-input { flex: 1; min-width: 0; }
+.dash-todo-priority { flex-shrink: 0; }
+.dash-todo-list { display: flex; flex-direction: column; gap: 4px; }
+.dash-todo-row { display: flex; align-items: center; gap: 8px; padding: 6px 4px; border-radius: var(--radius); }
+.dash-todo-row:hover { background: var(--surface-3); }
+.dash-todo-row .dash-todo-content { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-todo-row.is-done .dash-todo-content { text-decoration: line-through; color: var(--text-faint); }
+.dash-todo-row small { color: var(--text-soft); font-size: var(--fs-meta); }
 
 .dash-pager {
   display: flex;

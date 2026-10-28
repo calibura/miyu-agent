@@ -10,6 +10,7 @@
 //! 的目标做了什么,只进 tracing,不进库——目标本身的全过程在对话记录里有。
 
 use crate::web::*;
+use miyu_core::state::DaemonTodo;
 
 /// 一个目标的出口形态:目标字段 + 会话标识。
 fn goal_json(record: &miyu_core::state::GoalRecord, session_name: &str) -> serde_json::Value {
@@ -162,4 +163,121 @@ pub(in crate::web) async fn goal_action_http(
             ))
         }
     }
+}
+
+/* ── daemon 级轻量待办 ───────────────────────────────── */
+
+fn daemon_todo_json(todo: &DaemonTodo) -> serde_json::Value {
+    serde_json::json!({
+        "id": todo.id,
+        "content": todo.content,
+        "priority": todo.priority,
+        "status": todo.status,
+        "created_at": todo.created_at,
+        "completed_at": todo.completed_at,
+    })
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::web) struct CreateTodoRequest {
+    #[serde(default)]
+    content: String,
+    #[serde(default)]
+    priority: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(in crate::web) struct UpdateTodoRequest {
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    priority: Option<String>,
+}
+
+/// daemon 台面账 CRUD。管理员读写自己的库;成员库各管各的台面,同理。
+pub(in crate::web) async fn daemon_todos_http(
+    State(state): State<DaemonState>,
+    headers: HeaderMap,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    let identity = require_identity(&headers, &state)?;
+    let store = state
+        .stores
+        .for_identity(&identity)
+        .map_err(ApiError::internal)?;
+    let todos = store
+        .daemon_todos()
+        .map_err(|error| ApiError::internal(safe_error_message(&error)))?;
+    let items = todos.iter().map(daemon_todo_json).collect::<Vec<_>>();
+    Ok(Json(serde_json::json!({ "todos": items })))
+}
+
+pub(in crate::web) async fn daemon_todo_create_http(
+    State(state): State<DaemonState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateTodoRequest>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    require_mutation(&headers, &state)?;
+    let identity = require_identity(&headers, &state)?;
+    let store = state
+        .stores
+        .for_identity(&identity)
+        .map_err(ApiError::internal)?;
+    let priority = if request.priority.trim().is_empty() {
+        "medium"
+    } else {
+        request.priority.trim()
+    };
+    let todo = store
+        .create_daemon_todo(&request.content, priority)
+        .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, safe_error_message(&error)))?;
+    Ok(Json(
+        serde_json::json!({ "ok": true, "todo": daemon_todo_json(&todo) }),
+    ))
+}
+
+pub(in crate::web) async fn daemon_todo_update_http(
+    State(state): State<DaemonState>,
+    headers: HeaderMap,
+    Path(todo_id): Path<i64>,
+    Json(request): Json<UpdateTodoRequest>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    require_mutation(&headers, &state)?;
+    let identity = require_identity(&headers, &state)?;
+    let store = state
+        .stores
+        .for_identity(&identity)
+        .map_err(ApiError::internal)?;
+    let result = store.update_daemon_todo(
+        todo_id,
+        request.status.as_deref(),
+        request.priority.as_deref(),
+    );
+    match result {
+        Ok(todo) => Ok(Json(
+            serde_json::json!({ "ok": true, "todo": daemon_todo_json(&todo) }),
+        )),
+        Err(error) => Err(ApiError::new(
+            StatusCode::CONFLICT,
+            safe_error_message(&error),
+        )),
+    }
+}
+
+pub(in crate::web) async fn daemon_todo_delete_http(
+    State(state): State<DaemonState>,
+    headers: HeaderMap,
+    Path(todo_id): Path<i64>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    require_mutation(&headers, &state)?;
+    let identity = require_identity(&headers, &state)?;
+    let store = state
+        .stores
+        .for_identity(&identity)
+        .map_err(ApiError::internal)?;
+    store
+        .delete_daemon_todo(todo_id)
+        .map_err(|error| ApiError::internal(safe_error_message(&error)))?;
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
