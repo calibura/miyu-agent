@@ -26,6 +26,7 @@ fn disabled_targeting_returns_none_and_core_fallback_is_preserved_exactly() {
             quote: true,
             mention: true,
             explicit_mention_user_ids: Vec::new(),
+        mention_all: false,
         }),
     };
 
