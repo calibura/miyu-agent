@@ -515,6 +515,7 @@ impl RemoteRepl {
             ReplSlashCommand::Delete => self.cmd_delete(command_args).await?,
             ReplSlashCommand::Sandbox => self.cmd_sandbox(command_args).await?,
             ReplSlashCommand::Goal => self.cmd_goal(command_args).await?,
+            ReplSlashCommand::Goals => self.cmd_goals().await?,
             ReplSlashCommand::Usage => self.cmd_usage().await?,
             ReplSlashCommand::Persona => self.cmd_persona(command_args).await?,
             ReplSlashCommand::Models => self.cmd_models(command_args).await?,

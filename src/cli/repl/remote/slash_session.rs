@@ -570,4 +570,97 @@ impl RemoteRepl {
         repl_note(&mut self.live_repl, &format!("\x1b[2m◎ {summary}\x1b[0m\n"))?;
         Ok(LoopStep::Continue)
     }
+
+    /// `/goals`：跨会话列出所有目标（全局视图）。
+    ///
+    /// 走 daemon 的 `GoalsOverview`：扫所有库不是 REPL 的事——按人分库的
+    /// 布局知识（家目录在哪、账号表在哪）在 daemon 的 StoreRegistry 里，
+    /// REPL 只有本会话的库连接。
+    pub(super) async fn cmd_goals(&mut self) -> Result<LoopStep> {
+        let Some((_, data)) =
+            repl_ipc_admin(&self.paths, &mut self.live_repl, IpcCommand::GoalsOverview).await?
+        else {
+            return Ok(LoopStep::Continue);
+        };
+        let goals = data
+            .get("goals")
+            .and_then(|value| value.as_array())
+            .cloned()
+            .unwrap_or_default();
+        repl_note(&mut self.live_repl, &render_goals_overview(&goals))?;
+        Ok(LoopStep::Continue)
+    }
+}
+
+/// `/goals` 的表格。暗色注释体(与命令回执一族),每行:会话名 / 阶段 /
+/// 轮次 / revision / 目标摘要;归属不是管理员时前面加账号 id——全库总览
+/// 里得看得出来目标是谁的。阻塞信息放摘要后面——那是「为什么不动」,
+/// 一览里最该看见的;goal_id 太长(它是 `goal_<32hex>`),截尾 8 位给个
+/// 线索就够,操作仍走目标所在会话的 `/goal`。
+fn render_goals_overview(goals: &[serde_json::Value]) -> String {
+    if goals.is_empty() {
+        return "\x1b[2m◎ 没有任何会话挂着目标。/goal <一件要做很久的事> 交代一件。\x1b[0m\n"
+            .to_string();
+    }
+    fn phase_label(phase: &str) -> &str {
+        match phase {
+            "active" => "进行中",
+            "paused" => "已暂停",
+            "blocked" => "受阻",
+            "complete" => "已完成",
+            other => other,
+        }
+    }
+    let mut lines = vec![format!(
+        "\x1b[2m◎ 目标总览({}条,按最近更新排序)\x1b[0m",
+        goals.len()
+    )];
+    for goal in goals {
+        let session = str_field(goal, "session_name");
+        let owner = str_field(goal, "owner");
+        let goal_id = str_field(goal, "goal_id");
+        let phase = str_field(goal, "phase");
+        let revision = goal
+            .get("revision")
+            .and_then(|value| value.as_i64())
+            .unwrap_or_default();
+        let rounds = goal
+            .get("rounds_started")
+            .and_then(|value| value.as_i64())
+            .unwrap_or_default();
+        let objective = str_field(goal, "objective");
+        // 摘要一行放不下就截断:总览是扫一眼的,不是读文章的。
+        let mut summary = objective.lines().next().unwrap_or_default().to_string();
+        let width = 60;
+        let char_count = summary.chars().count();
+        if char_count > width {
+            summary = summary.chars().take(width).collect::<String>() + "…";
+        }
+        let who = if owner.is_empty() {
+            String::new()
+        } else {
+            format!("{owner}·")
+        };
+        let tail = goal_id[goal_id.len().saturating_sub(8)..].to_string();
+        let mut line = format!(
+            "\x1b[2m· {who}{session} [{}] rev{revision} · {rounds}轮 · {tail}…\x1b[0m",
+            phase_label(&phase)
+        );
+        if let Some(blocked) = goal.get("blocked_message").and_then(|value| value.as_str()) {
+            if !blocked.is_empty() {
+                line.push_str(&format!(" · 卡在:{blocked}"));
+            }
+        }
+        lines.push(line);
+        lines.push(format!("\x1b[2m  {summary}\x1b[0m"));
+    }
+    lines.join("\n") + "\n"
+}
+
+fn str_field(value: &serde_json::Value, key: &str) -> String {
+    value
+        .get(key)
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string()
 }

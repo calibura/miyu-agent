@@ -278,6 +278,11 @@ pub enum Command {
     GoalStatus {
         target: SessionRef,
     },
+    /// `/goals`：跨会话列出所有库里的目标（TUI 全局视图）。
+    ///
+    /// 与 WebUI `/api/goals` 同一份扫库（`all_goal_overview`），语法上不
+    /// 带参数——成员会话只看得到自己名下的，这一步由 daemon 侧决定。
+    GoalsOverview,
     /// 某条车道开一条新会话时的上下文（系统提示词 + 工具表），**不建会话**。
     ///
     /// REPL 大厅里按 Tab 只换显示（09-23），换过去那条车道还没有会话；footer 上那个

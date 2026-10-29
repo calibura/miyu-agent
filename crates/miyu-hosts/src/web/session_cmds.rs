@@ -4,6 +4,7 @@
 //! 做成一个函数而不是一堆小函数，是因为它们共享同一套前置检查（会话存不存在、
 //! 有没有在跑回合、是不是平台会话）。
 
+use crate::runtime::all_goal_overview;
 use crate::web::*;
 
 /// Old WebUI versions could make a platform-owned conversation the global
@@ -490,6 +491,15 @@ pub(in crate::web) async fn handle_session_command(
         IpcCommand::GoalStatus { target } => {
             let record = resolve_local_session_ref(state, &target)?;
             Ok(json!({ "goal": goal_status_json(state, &record.session_id) }))
+        }
+        IpcCommand::GoalsOverview => {
+            // TUI 的 `/goals`:跨库总览。IPC 是本机 unix 套接字,连上来的就是
+            // 这台机器的用户(管理员),没有登录身份可收窄——与 WebUI 管理员
+            // 的口径一致(全员)。
+            // owner 一并带出:空串是管理员自己的库,其余是账号 id,总览里
+            // 要说清「这是谁的目标」。
+            let rows = all_goal_overview(&state.stores);
+            Ok(json!({ "goals": goals_overview_with_owner_json(&rows) }))
         }
         IpcCommand::EmptySessionContext { mode } => {
             let tokens = empty_session_context(state, mode.as_deref() == Some("dev"))

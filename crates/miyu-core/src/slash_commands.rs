@@ -58,6 +58,7 @@ pub enum ReplSlashCommand {
     Compact,
     Stt,
     Goal,
+    Goals,
     Reset,
     ResetMemory,
     ResetAllMemory,
@@ -316,6 +317,15 @@ pub const REPL_COMMAND_TABLE: &[ReplCommandSpec] = &[
         web: true,
     },
     ReplCommandSpec {
+        name: "/goals",
+        aliases: &[],
+        command: ReplSlashCommand::Goals,
+        arg_hint: "",
+        help_en: "list the goals of every session (all owners)",
+        help_zh: "列出所有会话的目标（各会话库都算）",
+        web: false,
+    },
+    ReplCommandSpec {
         name: "/reset",
         // `/clear` 就是 `/reset`（用户 09-24：功能相同）。它原来是清屏，清屏还有
         // Ctrl+L；别处的提示（压缩打转时「或使用 /clear 重新开始」）说的一直是这个意思。
@@ -537,7 +547,7 @@ pub fn during_turn(command: ReplSlashCommand, args: &str) -> DuringTurn {
         // 要占屏的面板；`/effort <档位>` 带参数不弹面板，但仍走同一条路。
         Effort | Models | Persona | Config => DuringTurn::Detach,
         // 长文（超过 2 行就落回正文缓冲，回合中写缓冲会写坏正在开的块）。
-        Help | Usage | History => DuringTurn::Detach,
+        Help | Usage | History | Goals => DuringTurn::Detach,
         // 一条 IPC + 浮层，不占屏，但实现在 `RemoteRepl` 上（见上）。
         Rename | Sandbox | Stt => DuringTurn::Detach,
         // 退出：Ctrl+D 本来就能在回合中退（回合留在 daemon 里继续跑），

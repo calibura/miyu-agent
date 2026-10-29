@@ -120,4 +120,58 @@ impl StoreRegistry {
             .unwrap()
             .insert(session_id.to_string(), owner.to_string());
     }
+
+    /// 账号表(管理员库里):跨库扫目标要用。
+    pub(crate) fn list_accounts(&self) -> Vec<miyu_core::state::Account> {
+        self.admin.list_accounts().unwrap_or_default()
+    }
+}
+
+/// 一行跨库目标总览:目标本身 + 会话名 + 归属(空串 = 管理员,其余是账号 id)。
+pub(crate) struct GoalOverviewRow {
+    pub owner: String,
+    pub record: miyu_core::state::GoalRecord,
+    pub session_name: String,
+}
+
+/// 跨库扫所有目标:管理员库一批,再扫账号表上每个成员的库(没开过的也开——
+/// 与 WebUI `/api/goals` 同一份口径,漏一个成员的目标比多开一个库文件贵)。
+/// 按 updated_at 倒序混排:总览要的是「现在都在忙什么」,顺序读的是时间。
+///
+/// 有 TUI(`/goals`)与 WebUI(`/api/goals`)两个客户:同一份读法,两边各拼
+/// 各的展示。谁名下的会话在谁的库,这里按 StoreRegistry 自己的缓存与账号
+/// 表定,读库口径与 `for_owner` 一致。
+pub(crate) fn all_goal_overview(registry: &StoreRegistry) -> Vec<GoalOverviewRow> {
+    let mut out = Vec::new();
+    let push = |owner: &str, store: StateStore, out: &mut Vec<GoalOverviewRow>| match store
+        .goals_with_session_names()
+    {
+        Ok(rows) => {
+            out.extend(
+                rows.into_iter()
+                    .map(|(record, session_name)| GoalOverviewRow {
+                        owner: owner.to_string(),
+                        record,
+                        session_name,
+                    }),
+            );
+        }
+        Err(error) => {
+            tracing::warn!(owner = %owner, error = %error, "goal overview: a store could not be read")
+        }
+    };
+    if let Ok(store) = registry.for_owner("") {
+        push("", store, &mut out);
+    }
+    let accounts = registry.list_accounts();
+    for account in accounts {
+        if account.disabled || account.is_admin() {
+            continue;
+        }
+        if let Ok(store) = registry.for_owner(&account.id) {
+            push(&account.id, store, &mut out);
+        }
+    }
+    out.sort_by(|a, b| b.record.updated_at.cmp(&a.record.updated_at));
+    out
 }

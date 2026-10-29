@@ -9,8 +9,114 @@
 //! WebUI 发起的 pause/resume/complete 都落审计日志:谁在什么时候对哪个会话
 //! 的目标做了什么,只进 tracing,不进库——目标本身的全过程在对话记录里有。
 
+use crate::runtime::{all_goal_overview, GoalOverviewRow};
 use crate::web::*;
 use miyu_core::state::DaemonTodo;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_paths(root: &std::path::Path) -> MiyuPaths {
+        MiyuPaths {
+            root_dir: root.to_path_buf(),
+            config_dir: root.join("config"),
+            config_file: root.join("config/config.jsonc"),
+            skills_dir: root.join("config/skills"),
+            data_dir: root.join("data"),
+            cache_dir: root.join("cache"),
+            state_dir: root.join("state"),
+            pictures_dir: root.join("pictures"),
+            fish_hook_file: root.join("fish"),
+            bash_hook_file: root.join("bash"),
+            zsh_hook_file: root.join("zsh"),
+            scripts_dir: root.join("scripts"),
+            system_scripts_dir: root.join("system-scripts"),
+        }
+    }
+
+    /// 跨库总览(管理员视角):管理员库和成员库里的目标都得出,带归属、按
+    /// updated_at 倒序。这是 TUI `/goals` 与 WebUI `/api/goals` 共用的读法,
+    /// 两个界面靠它不各写一份扫库。禁用的账号跳过——他的目标不再出现在
+    /// 总览里,和 WebUI 原来的口径一致。
+    #[test]
+    fn goal_overview_covers_admin_and_member_stores() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = DaemonState::for_test(test_paths(temp.path()), 8300).unwrap();
+        let persona = state.manager.lock().unwrap().config.active_persona_scope();
+
+        // 管理员库里的目标。
+        let admin_session = state
+            .state_store
+            .create_session_for_owner(
+                &persona,
+                "写代码",
+                miyu_core::state::USER_SESSION_KIND,
+                None,
+                "",
+            )
+            .unwrap()
+            .session_id;
+        state
+            .state_store
+            .create_goal(&admin_session, "把测试跑绿", None)
+            .unwrap();
+
+        // 成员账号 + 成员库里的目标。成员库由 StoreRegistry 第一次 for_owner 开。
+        // 先建管理员账号:第一个账号会被无条件提成管理员,没有它成员就成了管理员。
+        state
+            .state_store
+            .create_account(
+                "admin",
+                "管理员",
+                "pwd-123456",
+                miyu_core::state::ROLE_ADMIN,
+            )
+            .unwrap();
+        let account = state
+            .state_store
+            .create_account(
+                "xiaoming",
+                "小明",
+                "pwd-123456",
+                miyu_core::state::ROLE_MEMBER,
+            )
+            .unwrap();
+        assert!(!account.is_admin(), "第二个账号才是成员");
+        let member_store = state.stores.for_owner(&account.id).unwrap();
+        let member_session = member_store
+            .create_session_for_owner(
+                &persona,
+                "成员的会话",
+                miyu_core::state::USER_SESSION_KIND,
+                None,
+                &account.id,
+            )
+            .unwrap()
+            .session_id;
+        member_store
+            .create_goal(&member_session, "整理相册", None)
+            .unwrap();
+
+        let rows = all_goal_overview(&state.stores);
+        assert_eq!(rows.len(), 2, "管理员和成员的目标都要在");
+        // 后建的目标 updated_at 更大,排前面。
+        assert_eq!(rows[0].record.objective, "整理相册");
+        assert_eq!(rows[0].owner, account.id);
+        assert_eq!(rows[0].session_name, "成员的会话");
+        assert_eq!(rows[1].record.objective, "把测试跑绿");
+        assert_eq!(rows[1].owner, "", "管理员库的归属是空串");
+
+        // 禁用后他的目标不再出现。
+        state
+            .state_store
+            .set_account_disabled(&account.id, true)
+            .unwrap();
+        let rows = all_goal_overview(&state.stores);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].record.objective, "把测试跑绿");
+    }
+}
 
 /// 一个目标的出口形态:目标字段 + 会话标识。
 fn goal_json(record: &miyu_core::state::GoalRecord, session_name: &str) -> serde_json::Value {
@@ -36,45 +142,55 @@ pub(in crate::web) async fn goals_overview_http(
     headers: HeaderMap,
 ) -> std::result::Result<Json<serde_json::Value>, ApiError> {
     let identity = require_identity(&headers, &state)?;
-    let mut goals = Vec::new();
-    if identity.admin {
-        // 管理员库一批,再扫已打开的成员库。未打开的成员库也开:目标列表
-        // 要全,漏一个成员的目标比多开一个库文件贵。
-        if let Ok(store) = state.stores.for_owner("") {
-            push_store_goals(store, &mut goals);
-        }
-        let accounts = state.state_store.list_accounts().unwrap_or_default();
-        for account in accounts {
-            if account.disabled {
-                continue;
-            }
-            if let Ok(store) = state.stores.for_owner(&account.id) {
-                push_store_goals(store, &mut goals);
-            }
-        }
+    // 管理员走 `all_goal_overview`(管理员库 + 所有成员库,TUI 的 `/goals`
+    // 走同一条);成员只看自己名下的,扫库收窄到自己那一个库。
+    let goals = if identity.admin {
+        all_goal_overview(&state.stores)
     } else {
-        let store = state
+        state
             .stores
             .for_identity(&identity)
-            .map_err(ApiError::internal)?;
-        push_store_goals(store, &mut goals);
-    }
-    goals.sort_by(|a, b| b.0.updated_at.cmp(&a.0.updated_at));
+            .map_err(ApiError::internal)?
+            .goals_with_session_names()
+            .map(|rows| {
+                rows.into_iter()
+                    .map(|(record, session_name)| GoalOverviewRow {
+                        owner: identity.owner_key().to_string(),
+                        record,
+                        session_name,
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+    };
     let items = goals
         .iter()
-        .map(|(record, name)| goal_json(record, name))
+        .map(|row| goal_json(&row.record, &row.session_name))
         .collect::<Vec<_>>();
     Ok(Json(serde_json::json!({ "goals": items })))
 }
 
-fn push_store_goals(
-    store: miyu_core::state::StateStore,
-    out: &mut Vec<(miyu_core::state::GoalRecord, String)>,
-) {
-    match store.goals_with_session_names() {
-        Ok(rows) => out.extend(rows),
-        Err(error) => tracing::warn!(error = %error, "goal overview: a store could not be read"),
-    }
+/// 总览一行的 JSON 形态。IPC(`/goals` 的 TUI 侧)与 HTTP 共用的展示函数。
+pub(in crate::web) fn goals_overview_json(rows: &[GoalOverviewRow]) -> Vec<serde_json::Value> {
+    rows.iter()
+        .map(|row| goal_json(&row.record, &row.session_name))
+        .collect()
+}
+
+/// 与 `goal_json` 同形,补上归属。TUI 的总览要看见「这是谁的目标」;WebUI
+/// 侧栏只给自己的帐号,没要这个字段。
+pub(in crate::web) fn goals_overview_with_owner_json(
+    rows: &[GoalOverviewRow],
+) -> Vec<serde_json::Value> {
+    rows.iter()
+        .map(|row| {
+            let mut value = goal_json(&row.record, &row.session_name);
+            value
+                .as_object_mut()
+                .map(|object| object.insert("owner".into(), serde_json::json!(row.owner)));
+            value
+        })
+        .collect()
 }
 
 #[derive(serde::Deserialize)]
