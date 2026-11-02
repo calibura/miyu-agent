@@ -75,7 +75,8 @@ pub struct VoiceTtsConfig {
     /// 任一开启都会拉起 miyu-voice(唤醒关闭时它只管播放,不开麦克风)。
     #[serde(default)]
     pub enabled: bool,
-    /// 播报供应商:`minimax` | `mimo`(小米 MiMo);None / 空 = 默认 MiniMax。
+    /// 播报供应商:`minimax` | `mimo`(小米 MiMo)| `gptsovits`(本地 GPT-SoVITS);
+    /// None / 空 = 默认 MiniMax。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active: Option<String>,
     /// 播报文本上限(字),超出截断。
@@ -88,6 +89,8 @@ pub struct VoiceTtsConfig {
     pub minimax: MiniMaxTtsConfig,
     #[serde(default)]
     pub mimo: MimoTtsConfig,
+    #[serde(default)]
+    pub gptsovits: GptSovitsTtsConfig,
 }
 
 /// 小米 MiMo 语音合成(`mimo-v2.5-tts` 系列,OpenAI 兼容的 `chat/completions`:
@@ -154,8 +157,96 @@ impl MimoTtsConfig {
     }
 }
 
+/// 本地 GPT-SoVITS(`api_v2.py`,`POST /tts`)。自托管,不需要 API key ——
+/// 「配好了」的判据是填了 base_url(默认就是本机 9880)。
+///
+/// 音色不是靠 id 选的,而是靠一段参考音频:同样的文本 + 不同的
+/// `ref_audio_path` / `prompt_text`,出来就是不同的人。微调过的模型
+/// (t2s/vits 权重)在 GPT-SoVITS 那一侧配,miyu 不关心。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct GptSovitsTtsConfig {
+    /// 服务地址,默认本机 `http://127.0.0.1:9880`。
+    #[serde(default = "default_gptsovits_base_url")]
+    pub base_url: String,
+    /// 请求超时(秒)。本地推理首次调用要加载模型,给宽一点。
+    #[serde(default = "default_gptsovits_timeout")]
+    pub timeout_seconds: u64,
+    /// 参考音频路径(GPT-SoVITS 那一侧的路径,服务端读)。
+    #[serde(default)]
+    pub ref_audio_path: String,
+    /// 参考音频里说的那段话,必须和音频逐字对应。
+    #[serde(default)]
+    pub prompt_text: String,
+    /// 参考音频的语言:zh / en / ja / ko / yue / auto。
+    #[serde(default = "default_gptsovits_lang")]
+    pub prompt_lang: String,
+    /// 待合成文本的语言,同上。
+    #[serde(default = "default_gptsovits_lang")]
+    pub text_lang: String,
+    /// 切句方式:cut0(不切)| cut1 | cut2 | cut3 | cut4 | cut5。
+    /// 短句用 cut5,长文用 cut3 更稳。
+    #[serde(default = "default_gptsovits_split")]
+    pub text_split_method: String,
+    /// 额外参考音频(情绪参考):给一组不同语气的片段,让合成的情绪更贴近。
+    /// 空 = 只用 ref_audio_path。
+    #[serde(default)]
+    pub aux_ref_audio_paths: Vec<String>,
+    /// 语速倍率 0.5~2.0。
+    #[serde(default = "default_unit")]
+    pub speed_factor: f32,
+    /// 返回格式:wav | ogg | aac | raw。QQ 语音条走 wav 最稳。
+    #[serde(default = "default_gptsovits_media")]
+    pub media_type: String,
+}
+
+fn default_gptsovits_base_url() -> String {
+    "http://127.0.0.1:9880".to_string()
+}
+fn default_gptsovits_timeout() -> u64 {
+    // 本地 GPU 首次推理要加载 GPT + SoVITS 权重,给足。
+    180
+}
+fn default_gptsovits_lang() -> String {
+    "zh".to_string()
+}
+fn default_gptsovits_split() -> String {
+    "cut5".to_string()
+}
+fn default_gptsovits_media() -> String {
+    "wav".to_string()
+}
+
+impl Default for GptSovitsTtsConfig {
+    fn default() -> Self {
+        Self {
+            base_url: default_gptsovits_base_url(),
+            timeout_seconds: default_gptsovits_timeout(),
+            ref_audio_path: String::new(),
+            prompt_text: String::new(),
+            prompt_lang: default_gptsovits_lang(),
+            text_lang: default_gptsovits_lang(),
+            text_split_method: default_gptsovits_split(),
+            aux_ref_audio_paths: Vec::new(),
+            speed_factor: 1.0,
+            media_type: default_gptsovits_media(),
+        }
+    }
+}
+
+impl GptSovitsTtsConfig {
+    /// 自托管服务没有 key:填了地址就算配好,但参考音频是硬要求 ——
+    /// 没有参考音频 GPT-SoVITS 根本不知道怎么发音色。
+    pub fn has_key(&self) -> bool {
+        !self.base_url.trim().is_empty() && !self.ref_audio_path.trim().is_empty()
+    }
+}
+
 /// 播报供应商 id 与显示名(TUI/WebUI 列表顺序)。
-pub const TTS_PROVIDERS: &[(&str, &str)] = &[("minimax", "MiniMax"), ("mimo", "Xiaomi MiMo")];
+pub const TTS_PROVIDERS: &[(&str, &str)] = &[
+    ("minimax", "MiniMax"),
+    ("mimo", "Xiaomi MiMo"),
+    ("gptsovits", "GPT-SoVITS"),
+];
 
 /// MiniMax `t2a_v2` 播报配置。
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -219,6 +310,7 @@ impl Default for VoiceTtsConfig {
             preview_text: default_tts_preview_text(),
             minimax: MiniMaxTtsConfig::default(),
             mimo: MimoTtsConfig::default(),
+            gptsovits: GptSovitsTtsConfig::default(),
         }
     }
 }
@@ -262,6 +354,7 @@ impl VoiceTtsConfig {
         match provider {
             "minimax" => self.minimax.has_key(),
             "mimo" => self.mimo.has_key(),
+            "gptsovits" => self.gptsovits.has_key(),
             _ => false,
         }
     }

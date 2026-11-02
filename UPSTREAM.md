@@ -55,6 +55,24 @@ git log --oneline upstream/main..HEAD      # 我们比上游多的
 - `feat(voice): 接入 GPT-SoVITS 播报供应商` — 本地部署的 GPT-SoVITS 作为
   TTS 后端，支持自定义音色与情绪参考音频
 
+  GPT-SoVITS 与另两家供应商的差别，改代码时要记得：
+
+  - **没有 API key**。自托管，「配好了」的判据是 `base_url` 非空 **且**
+    `ref_audio_path` 非空（`GptSovitsTtsConfig::has_key`）。缺参考音频时
+    `is_active()` 为假，`send_voice_message` 不会被注册。
+  - **协议不同**。`POST {base}/tts`（`api_v2.py`），参数是
+    `text / text_lang / ref_audio_path / prompt_text / prompt_lang /
+    text_split_method / media_type`，成功时返回**裸 wav 字节**而不是 JSON。
+    所以 `gptsovits_extract_audio` 不按 JSON 解析，先看状态码再验
+    `RIFF…WAVE` 头，失败时才回退去解析 `{"message": ...}`。
+  - **地址不补 `/v1`**。MiniMax / MiMo 会补，GPT-SoVITS 不会，反而会把
+    用户多填的 `/v1` 剥掉（`gptsovits_base`）。
+  - **超时可配**。`gptsovits.timeout_seconds` 默认 180 秒，因为本地首次
+    推理要加载 GPT + SoVITS 权重。另两家的超时是硬编码在
+    `voice_tts.rs` 里的（MiMo 90s / MiniMax 60s）。
+  - **音色不是 id**。音色由参考音频决定，服务端没有音色注册表，
+    `list_gptsovits_voices` 只回当前配的那一条给设置页显示。
+
 ### WebUI / TUI
 
 - `feat(web): goal management panel with cross-session overview` — 跨会话目标面板
@@ -67,6 +85,15 @@ git log --oneline upstream/main..HEAD      # 我们比上游多的
 本分叉的构建方式见 `~/.miyu/qq-module/rebuild.sh`：从本仓库切分支、`cargo build
 --release`、把产物装到 `/usr/bin/miyu`。注意 `yay -S miyu` 之类的包管理器
 升级会用上游版本覆盖 `/usr/bin/miyu`，升级后需要重新用本仓库构建。
+
+**改 `web/` 下任何文件都必须重新编译。** WebUI 的静态资源是通过
+`include_str!` 内嵌进二进制的（见 `crates/miyu-hosts/src/web/mod.rs` 的
+`INDEX_HTML` / `STYLES_CSS` / `APP_JS` 等常量），不是运行时从磁盘读。
+改完 JS 只重启 daemon 不会生效。
+
+前端文案的英文翻译在 `web/i18n-en.js`，CI 会跑
+`python3 test_scripts/check-webui-i18n.py` 校验引用与词典的一致性，
+提交前本地跑一遍。
 
 ## 与上游同步的建议
 

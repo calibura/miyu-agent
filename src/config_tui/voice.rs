@@ -1,5 +1,6 @@
 //! 语音功能菜单:总开关 → 播报供应商(MiniMax:连接/模型、音色浏览、参数、
-//! 试听;小米 MiMo:连接/模型/音色、风格与指令、试听)→ 识别与唤醒设置。
+//! 试听;小米 MiMo:连接/模型/音色、风格与指令、试听;本地 GPT-SoVITS:
+//! 连接与参考音频、切句与语速、试听)→ 识别与唤醒设置。
 //!
 //! 唤醒词能否编码成 KWS 音节这件事在 `miyu-voice` 进程里做(本进程不链接
 //! 语音栈),这里只做形式校验(非空、含中文)。麦克风列表同样问
@@ -13,6 +14,12 @@ use crate::config_tui::*;
 use anyhow::Context as _;
 use miyu_base::config::{MiniMaxTtsConfig, VoiceTtsConfig, TTS_PROVIDERS};
 use miyu_hosts::web::voice_tts::{MIMO_MODELS, MIMO_VOICES};
+
+/// GPT-SoVITS 支持的语言(api_v2 的 `text_lang` / `prompt_lang` 取值)。
+const GPTSOVITS_LANGS: &[&str] = &["zh", "en", "ja", "ko", "yue", "auto"];
+
+/// GPT-SoVITS 的切句方式。短句用 cut5,长文用 cut3 更稳。
+const GPTSOVITS_SPLITS: &[&str] = &["cut0", "cut1", "cut2", "cut3", "cut4", "cut5"];
 
 /// MiMo 风格标签(文档 2026-09):情绪 / 语气 / 音色定位 / 角色 / 方言,多选。
 const MIMO_STYLES: &[&str] = &[
@@ -212,9 +219,26 @@ fn provider_display_name(provider: &str) -> &'static str {
 /// 某供应商的一行摘要:模型 · 音色,没填 key 就说没填。
 fn provider_summary(tts: &VoiceTtsConfig, provider: &str) -> String {
     if !tts.provider_has_key(provider) {
-        return t("no api key yet", "未填 key").to_string();
+        // 自托管的那家没有 key,缺的是参考音频,别误导成「去填 key」。
+        return if provider == "gptsovits" {
+            t("no reference audio yet", "未填参考音频").to_string()
+        } else {
+            t("no api key yet", "未填 key").to_string()
+        };
     }
     match provider {
+        "gptsovits" => {
+            let cfg = &tts.gptsovits;
+            let voice = cfg
+                .ref_audio_path
+                .trim()
+                .rsplit('/')
+                .next()
+                .filter(|name| !name.is_empty())
+                .unwrap_or("?")
+                .to_string();
+            format!("{} · {voice}", cfg.text_lang)
+        }
         "mimo" => {
             let cfg = &tts.mimo;
             let voice = if cfg.model.ends_with("voicedesign") {
@@ -352,6 +376,7 @@ fn edit_tts_providers(ui: &mut Ui, paths: &MiyuPaths, config: &mut AppConfig) ->
             KeyCode::Enter => {
                 let outcome = match provider {
                     "mimo" => edit_mimo(ui, paths, config),
+                    "gptsovits" => edit_gptsovits(ui, paths, config),
                     _ => edit_minimax(ui, paths, config),
                 };
                 if let Err(error) = outcome {
@@ -523,6 +548,153 @@ fn edit_mimo_style(ui: &mut Ui, config: &mut AppConfig) -> Result<()> {
     } else {
         preview
     };
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// 本地 GPT-SoVITS
+// ---------------------------------------------------------------------------
+
+/// GPT-SoVITS 配置菜单:连接与参考音频 / 切句与语速 / 试听。
+fn edit_gptsovits(ui: &mut Ui, paths: &MiyuPaths, config: &mut AppConfig) -> Result<()> {
+    let mut selected = 0usize;
+    loop {
+        let cfg = &config.voice.tts.gptsovits;
+        let ref_label = cfg
+            .ref_audio_path
+            .trim()
+            .rsplit('/')
+            .next()
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| t("(none)", "(未配)").to_string());
+        let options = [
+            format!(
+                "{} ({}{})",
+                t("Connection and reference audio", "连接与参考音频"),
+                if cfg.base_url.trim().is_empty() {
+                    t("no address", "未填地址").to_string()
+                } else {
+                    cfg.base_url.trim().to_string()
+                },
+                format!(" · {ref_label}")
+            ),
+            format!(
+                "{} ({} {}s · {} {})",
+                t("Splitting and speed", "切句与语速"),
+                t("timeout", "超时"),
+                cfg.timeout_seconds,
+                t("speed", "语速"),
+                cfg.speed_factor
+            ),
+            t("Preview", "试听").to_string(),
+        ];
+        draw_menu(
+            ui,
+            " GPT-SoVITS ",
+            &options,
+            selected,
+            t("[Enter]open [q]back", "[Enter]进入 [q]返回"),
+        )?;
+        match read_key(ui)? {
+            KeyCode::Esc | KeyCode::Char('q') => return Ok(()),
+            KeyCode::Up | KeyCode::Char('k') => selected = selected.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => selected = (selected + 1).min(options.len() - 1),
+            KeyCode::Enter => {
+                let outcome = match selected {
+                    0 => edit_gptsovits_connection(ui, config),
+                    1 => edit_gptsovits_splitting(ui, config),
+                    _ => preview_tts(paths, &config.voice.tts, "gptsovits", None),
+                };
+                if let Err(error) = outcome {
+                    show_tui_error(ui, &error)?;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn edit_gptsovits_connection(ui: &mut Ui, config: &mut AppConfig) -> Result<()> {
+    let cfg = config.voice.tts.gptsovits.clone();
+    let aux = cfg.aux_ref_audio_paths.join(",");
+    let mut fields = vec![
+        Field::new(t("Base URL", "接口地址"), cfg.base_url.clone()),
+        // 音色就是这段音频,必须填;路径是**服务端**能读到的路径。
+        Field::new(
+            t(
+                "Reference audio path (read by the GPT-SoVITS server)",
+                "参考音频路径(服务端读得到)",
+            ),
+            cfg.ref_audio_path.clone(),
+        ),
+        Field::new(
+            t(
+                "Text spoken in the reference audio (verbatim)",
+                "参考音频里说的那段话(须逐字一致)",
+            ),
+            cfg.prompt_text.clone(),
+        ),
+        Field::new(
+            t(
+                "Emotion reference audios (comma separated, optional)",
+                "情绪参考音频(逗号分隔,可空)",
+            ),
+            aux,
+        ),
+        Field::new(
+            t("Max spoken chars", "播报字数上限"),
+            config.voice.tts.max_chars.to_string(),
+        ),
+    ];
+    run_form_without_buttons(
+        ui,
+        t(
+            " GPT-SoVITS CONNECTION ",
+            " GPT-SoVITS 连接与参考音频 ",
+        ),
+        &mut fields,
+    )?;
+    let tts = &mut config.voice.tts;
+    tts.gptsovits.base_url = fields[0].value.trim().to_string();
+    tts.gptsovits.ref_audio_path = fields[1].value.trim().to_string();
+    tts.gptsovits.prompt_text = fields[2].value.trim().to_string();
+    tts.gptsovits.aux_ref_audio_paths = fields[3]
+        .value
+        .split(|ch: char| ch == ',' || ch == '，')
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+        .map(str::to_string)
+        .collect();
+    tts.max_chars = fields[4].value.trim().parse::<usize>()?.max(20);
+    adopt_provider_if_current_unusable(tts, "gptsovits");
+    Ok(())
+}
+
+fn edit_gptsovits_splitting(ui: &mut Ui, config: &mut AppConfig) -> Result<()> {
+    let cfg = config.voice.tts.gptsovits.clone();
+    let mut fields = vec![
+        Field::new(t("Text language", "文本语言"), cfg.text_lang.clone()).choices(GPTSOVITS_LANGS),
+        Field::new(t("Prompt language", "参考音频语言"), cfg.prompt_lang.clone())
+            .choices(GPTSOVITS_LANGS),
+        Field::new(t("Split method", "切句方式"), cfg.text_split_method.clone())
+            .choices(GPTSOVITS_SPLITS),
+        // 本地首次推理要加载 GPT + SoVITS 权重,默认给足 180 秒。
+        Field::new(t("Timeout (seconds)", "超时(秒)"), cfg.timeout_seconds.to_string()),
+        Field::new(t("Speed factor (0.5-2.0)", "语速倍率(0.5-2.0)"), cfg.speed_factor.to_string()),
+    ];
+    run_form_without_buttons(
+        ui,
+        t(" GPT-SoVITS SPLITTING ", " GPT-SoVITS 切句与语速 "),
+        &mut fields,
+    )?;
+    let tts = &mut config.voice.tts;
+    tts.gptsovits.text_lang = fields[0].value.trim().to_string();
+    tts.gptsovits.prompt_lang = fields[1].value.trim().to_string();
+    tts.gptsovits.text_split_method = fields[2].value.trim().to_string();
+    let timeout = fields[3].value.trim().parse::<u64>()?;
+    tts.gptsovits.timeout_seconds = if timeout == 0 { 180 } else { timeout };
+    tts.gptsovits.speed_factor = fields[4].value.trim().parse::<f32>()?.clamp(0.5, 2.0);
     Ok(())
 }
 

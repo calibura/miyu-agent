@@ -8,7 +8,7 @@
 
 use anyhow::{Context, Result};
 use base64::Engine as _;
-use miyu_base::config::{MimoTtsConfig, MiniMaxTtsConfig, VoiceTtsConfig};
+use miyu_base::config::{GptSovitsTtsConfig, MimoTtsConfig, MiniMaxTtsConfig, VoiceTtsConfig};
 use miyu_base::i18n::text as t;
 use serde_json::{json, Value};
 
@@ -146,6 +146,7 @@ pub(crate) fn spoken_text(reply: &str, tts: &VoiceTtsConfig) -> String {
 pub(crate) async fn synthesize(tts: &VoiceTtsConfig, text: &str) -> Result<Vec<u8>> {
     match tts.provider() {
         Some("mimo") => synthesize_mimo(&tts.mimo, text).await,
+        Some("gptsovits") => synthesize_gptsovits(&tts.gptsovits, text).await,
         Some("minimax") | None => synthesize_minimax(&tts.minimax, text).await,
         Some(other) => anyhow::bail!(
             "{}",
@@ -163,6 +164,8 @@ pub(crate) async fn list_voices(tts: &VoiceTtsConfig, provider: &str) -> Result<
     match provider {
         "mimo" => Ok(list_mimo_voices()),
         "minimax" => list_minimax_voices(&tts.minimax).await,
+        // 音色由参考音频决定,服务端没有音色注册表可查:给当前配的那条。
+        "gptsovits" => Ok(list_gptsovits_voices(&tts.gptsovits)),
         other => anyhow::bail!(
             "{}",
             t(
@@ -640,6 +643,189 @@ pub async fn list_minimax_voices(tts: &MiniMaxTtsConfig) -> Result<Vec<Value>> {
     Ok(out)
 }
 
+// ---------------------------------------------------------------------------
+// 本地 GPT-SoVITS
+// ---------------------------------------------------------------------------
+
+fn gptsovits_base(cfg: &GptSovitsTtsConfig) -> String {
+    let base = cfg.base_url.trim().trim_end_matches('/');
+    // 本机跑 api_v2.py 时填 `http://127.0.0.1:9880` 就行,它自己不挂 /v1;
+    // 用户要是按习惯填了 /v1 也不至于 404,顺手剥掉。
+    match base.strip_suffix("/v1") {
+        Some(head) if !head.is_empty() => head.to_string(),
+        _ => base.to_string(),
+    }
+}
+
+/// GPT-SoVITS 的「配没配好」:地址非空 + 有参考音频(判据在
+/// `GptSovitsTtsConfig::has_key`)。这里再挡一次,好在请求前给出人话。
+fn gptsovits_ensure_ready(cfg: &GptSovitsTtsConfig) -> Result<()> {
+    anyhow::ensure!(
+        !cfg.base_url.trim().is_empty(),
+        t(
+            "The GPT-SoVITS speech provider has no base_url configured",
+            "GPT-SoVITS 播报没有配置 base_url",
+        )
+    );
+    anyhow::ensure!(
+        !cfg.ref_audio_path.trim().is_empty(),
+        t(
+            "The GPT-SoVITS speech provider needs a reference audio (ref_audio_path)",
+            "GPT-SoVITS 播报需要一段参考音频(ref_audio_path)",
+        )
+    );
+    Ok(())
+}
+
+/// `api_v2.py` 的 `/tts` 请求体。音色由参考音频决定,不是靠 id 选。
+pub(crate) fn gptsovits_request_body(cfg: &GptSovitsTtsConfig, text: &str) -> Result<Value> {
+    gptsovits_ensure_ready(cfg)?;
+    let with_default = |value: &str, fallback: &str| {
+        let value = value.trim();
+        if value.is_empty() {
+            fallback.to_string()
+        } else {
+            value.to_string()
+        }
+    };
+    let aux: Vec<&str> = cfg
+        .aux_ref_audio_paths
+        .iter()
+        .map(|path| path.trim())
+        .filter(|path| !path.is_empty())
+        .collect();
+    let mut body = json!({
+        "text": text,
+        "text_lang": with_default(&cfg.text_lang, "zh"),
+        "ref_audio_path": cfg.ref_audio_path.trim(),
+        "prompt_text": cfg.prompt_text.trim(),
+        "prompt_lang": with_default(&cfg.prompt_lang, "zh"),
+        "text_split_method": with_default(&cfg.text_split_method, "cut5"),
+        "batch_size": 1,
+        "speed_factor": cfg.speed_factor.clamp(0.5, 2.0),
+        // QQ 语音条与播报都要一次完整一段,不走流式。
+        "streaming_mode": false,
+        "media_type": with_default(&cfg.media_type, "wav"),
+    });
+    if !aux.is_empty() {
+        body["aux_ref_audio_paths"] = json!(aux);
+    }
+    Ok(body)
+}
+
+/// 从 `api_v2.py` 的应答里取音频:成功是**裸音频字节**,失败才是 JSON。
+///
+/// 所以判据不是「像不像 wav」——`media_type` 配成 `aac` / `raw` 时头就变了,
+/// 按头校验会把成功当失败。反过来判:状态码不对,或者正文能当 JSON 对象
+/// 解析出来,才算失败;其余一律当音频交给调用方(长度另查)。
+pub(crate) fn gptsovits_extract_audio(
+    status: u16,
+    content_type: Option<&str>,
+    bytes: Vec<u8>,
+) -> Result<Vec<u8>> {
+    let error_payload = serde_json::from_slice::<Value>(&bytes)
+        .ok()
+        .filter(Value::is_object);
+    if !(200..300).contains(&status) || error_payload.is_some() {
+        // 失败时 api_v2 回 `{"message": "..."}`。
+        let message = error_payload
+            .and_then(|payload| {
+                payload
+                    .pointer("/message")
+                    .or_else(|| payload.pointer("/detail"))
+                    .or_else(|| payload.pointer("/error"))
+                    .and_then(|value| match value {
+                        Value::String(text) => Some(text.clone()),
+                        Value::Null => None,
+                        other => Some(other.to_string()),
+                    })
+            })
+            .or_else(|| {
+                let text = String::from_utf8_lossy(&bytes);
+                let text = text.trim();
+                (!text.is_empty()).then(|| crate::web::voice_bridge::clip(text, 200))
+            })
+            .unwrap_or_else(|| "unknown".to_string());
+        anyhow::bail!(
+            "{}",
+            t(
+                "GPT-SoVITS synthesis failed (HTTP {status}, content-type {ctype}): {message}",
+                "GPT-SoVITS 合成失败(HTTP {status},content-type {ctype}):{message}",
+            )
+            .replace("{status}", &status.to_string())
+            .replace("{ctype}", content_type.unwrap_or("-"))
+            .replace("{message}", &message)
+        );
+    }
+    anyhow::ensure!(
+        bytes.len() > 44,
+        t("GPT-SoVITS returned empty audio", "GPT-SoVITS 返回的音频为空")
+    );
+    Ok(bytes)
+}
+
+/// GPT-SoVITS `api_v2.py` 的 `POST /tts`:文本 → wav 字节。
+/// 自托管,不带鉴权头;超时按配置给(本地首次推理要加载权重)。
+pub(crate) async fn synthesize_gptsovits(
+    cfg: &GptSovitsTtsConfig,
+    text: &str,
+) -> Result<Vec<u8>> {
+    let body = gptsovits_request_body(cfg, text)?;
+    let timeout = if cfg.timeout_seconds == 0 {
+        180
+    } else {
+        cfg.timeout_seconds
+    };
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(timeout))
+        .build()?;
+    let url = gptsovits_base(cfg);
+    let response = client
+        .post(format!("{url}/tts"))
+        .json(&body)
+        .send()
+        .await
+        .with_context(|| {
+            t(
+                "Requesting GPT-SoVITS /tts at {url}",
+                "请求 GPT-SoVITS /tts 失败({url})",
+            )
+            .replace("{url}", &url)
+        })?;
+    let status = response.status().as_u16();
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let bytes = response
+        .bytes()
+        .await
+        .context(t(
+            "Reading the GPT-SoVITS response",
+            "读取 GPT-SoVITS 应答",
+        ))?
+        .to_vec();
+    gptsovits_extract_audio(status, content_type.as_deref(), bytes)
+}
+
+/// GPT-SoVITS 没有音色注册表:音色就是那段参考音频。设置页下拉给当前配的
+/// 这一条,让界面有个可显示的值。
+pub(crate) fn list_gptsovits_voices(cfg: &GptSovitsTtsConfig) -> Vec<Value> {
+    let path = cfg.ref_audio_path.trim();
+    if path.is_empty() {
+        return Vec::new();
+    }
+    let label = match std::path::Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+    {
+        Some(name) => name.to_string(),
+        None => path.to_string(),
+    };
+    vec![json!({ "value": path, "label": label })]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -850,6 +1036,14 @@ mod tests {
         ));
         tts.active = Some("nope".to_string());
         assert!(synthesize(&tts, "x").now_or_never().unwrap().is_err());
+        // gptsovits 走自己的分支:缺参考音频时立刻报错,不发请求。
+        tts.active = Some("gptsovits".to_string());
+        let error = synthesize(&tts, "x").now_or_never().unwrap().unwrap_err();
+        assert!(error.to_string().contains("ref_audio_path"), "{error}");
+        assert!(list_voices(&tts, "gptsovits")
+            .now_or_never()
+            .map(|r| r.unwrap().is_empty())
+            == Some(true));
     }
 
     #[test]
@@ -886,5 +1080,161 @@ mod tests {
         assert_eq!(spoken_text(&reply, &tts), "第一句话。");
         // 兜底词跟随 UI 语言(测试环境 LANG 不定)。
         assert!(matches!(spoken_text("", &tts).as_str(), "办好了" | "done"));
+    }
+    // -----------------------------------------------------------------------
+    // GPT-SoVITS
+    // -----------------------------------------------------------------------
+
+    fn gptsovits_cfg() -> GptSovitsTtsConfig {
+        GptSovitsTtsConfig {
+            ref_audio_path: "/opt/refs/aimisi.wav".to_string(),
+            prompt_text: "我是爱弥斯。".to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn gptsovits_request_body_matches_api_v2() {
+        let body = gptsovits_request_body(&gptsovits_cfg(), "今天也是充满希望的一天").unwrap();
+        assert_eq!(body["text"], "今天也是充满希望的一天");
+        assert_eq!(body["text_lang"], "zh");
+        assert_eq!(body["prompt_lang"], "zh");
+        assert_eq!(body["ref_audio_path"], "/opt/refs/aimisi.wav");
+        assert_eq!(body["prompt_text"], "我是爱弥斯。");
+        assert_eq!(body["text_split_method"], "cut5");
+        assert_eq!(body["media_type"], "wav");
+        assert_eq!(body["streaming_mode"], false);
+        assert_eq!(body["batch_size"], 1);
+        // 没配 aux 就不带这个键,别给服务端塞空数组。
+        assert!(body.get("aux_ref_audio_paths").is_none());
+
+        // aux 参考音频只保留非空项。
+        let mut cfg = gptsovits_cfg();
+        cfg.aux_ref_audio_paths = vec!["  ".to_string(), "/opt/refs/sad.wav".to_string()];
+        cfg.speed_factor = 5.0;
+        let body = gptsovits_request_body(&cfg, "嗯").unwrap();
+        assert_eq!(body["aux_ref_audio_paths"], json!(["/opt/refs/sad.wav"]));
+        // 语速夹到文档范围。
+        assert_eq!(body["speed_factor"], 2.0);
+    }
+
+    #[test]
+    fn gptsovits_requires_reference_audio() {
+        let cfg = GptSovitsTtsConfig::default();
+        assert!(!cfg.has_key());
+        let error = gptsovits_request_body(&cfg, "你好").unwrap_err();
+        assert!(error.to_string().contains("ref_audio_path"), "{error}");
+        // 填了参考音频就算配好,不需要 key。
+        assert!(gptsovits_cfg().has_key());
+    }
+
+    #[test]
+    fn gptsovits_base_strips_v1_only_when_present() {
+        let cfg = GptSovitsTtsConfig::default();
+        assert_eq!(gptsovits_base(&cfg), "http://127.0.0.1:9880");
+        let mut cfg = GptSovitsTtsConfig {
+            base_url: "http://127.0.0.1:9880/".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(gptsovits_base(&cfg), "http://127.0.0.1:9880");
+        cfg.base_url = "http://127.0.0.1:9880/v1".to_string();
+        assert_eq!(gptsovits_base(&cfg), "http://127.0.0.1:9880");
+        // 只有 /v1 的裸地址不要剥成空串。
+        cfg.base_url = "/v1".to_string();
+        assert_eq!(gptsovits_base(&cfg), "/v1");
+    }
+
+    #[test]
+    fn gptsovits_extract_audio_accepts_raw_wav_and_reports_json_errors() {
+        let wav = fake_wav();
+        let got = gptsovits_extract_audio(200, Some("audio/wav"), wav.clone()).unwrap();
+        assert_eq!(got, wav);
+        // media_type=raw / aac 时头不是 RIFF,照样是成功。
+        let aac = vec![0xFFu8; 200];
+        assert_eq!(
+            gptsovits_extract_audio(200, Some("audio/aac"), aac.clone()).unwrap(),
+            aac
+        );
+        // content-type 缺省也不影响判断。
+        assert!(gptsovits_extract_audio(200, None, wav.clone()).is_ok());
+        // 200 但回的是 JSON 错误体(api_v2 某些异常路径是这样)。
+        let error = gptsovits_extract_audio(
+            200,
+            Some("application/json"),
+            br#"{"message":"ref audio not found"}"#.to_vec(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("ref audio not found"), "{error}");
+        let error =
+            gptsovits_extract_audio(500, Some("text/plain"), b"boom".to_vec()).unwrap_err();
+        assert!(error.to_string().contains("boom"), "{error}");
+        // 太短的"音频"当失败处理。
+        assert!(gptsovits_extract_audio(200, Some("audio/wav"), b"RIFF".to_vec()).is_err());
+    }
+
+    #[test]
+    fn gptsovits_voices_reflect_reference_audio() {
+        assert!(list_gptsovits_voices(&GptSovitsTtsConfig::default()).is_empty());
+        let voices = list_gptsovits_voices(&gptsovits_cfg());
+        assert_eq!(voices.len(), 1);
+        assert_eq!(voices[0]["value"], "/opt/refs/aimisi.wav");
+        assert_eq!(voices[0]["label"], "aimisi.wav");
+    }
+
+    /// 起一个本机假 GPT-SoVITS,走真实 HTTP 链路:校验路径/请求体,
+    /// 回**裸 wav 字节**(不是 JSON),确认拿到 wav。
+    #[tokio::test]
+    async fn synthesize_gptsovits_end_to_end_against_mock_server() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let wav = fake_wav();
+        let reply_wav = wav.clone();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = Vec::new();
+            let mut chunk = [0u8; 4096];
+            let (head, body_start) = loop {
+                let read = stream.read(&mut chunk).unwrap();
+                buffer.extend_from_slice(&chunk[..read]);
+                if let Some(pos) = buffer.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break (String::from_utf8_lossy(&buffer[..pos]).to_string(), pos + 4);
+                }
+            };
+            let length: usize = head
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length:")
+                        .map(|v| v.trim().parse().unwrap())
+                })
+                .unwrap();
+            while buffer.len() < body_start + length {
+                let read = stream.read(&mut chunk).unwrap();
+                buffer.extend_from_slice(&chunk[..read]);
+            }
+            let body: Value =
+                serde_json::from_slice(&buffer[body_start..body_start + length]).unwrap();
+            let _ = stream.write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    reply_wav.len()
+                )
+                .as_bytes(),
+            );
+            let _ = stream.write_all(&reply_wav);
+            (head, body)
+        });
+        let mut cfg = gptsovits_cfg();
+        cfg.base_url = format!("http://127.0.0.1:{port}");
+        let audio = synthesize_gptsovits(&cfg, "测试一句").await.unwrap();
+        assert_eq!(audio, wav);
+        let (head, body) = server.join().unwrap();
+        // 挂在根上的 /tts,不是 /v1/tts。
+        assert!(head.starts_with("POST /tts "), "{head}");
+        assert_eq!(body["text"], "测试一句");
+        assert_eq!(body["ref_audio_path"], "/opt/refs/aimisi.wav");
+        // 自托管无鉴权:不该带 Authorization。
+        assert!(!head.to_ascii_lowercase().contains("authorization"), "{head}");
     }
 }

@@ -1411,3 +1411,31 @@ fn ignoring_sleep_hours_is_scoped_to_the_one_conversation() {
     assert!(!qq.sleep_hours_ignored(PlatformConversationKind::Group, "999"));
     assert!(!qq.sleep_hours_ignored(PlatformConversationKind::Private, "130515298"));
 }
+
+/// GPT-SoVITS 自托管:没有 key 这一说,「配好了」= 填了地址 + 参考音频。
+/// 缺参考音频时不算激活,免得模型拿到一件注定失败的工具。
+#[test]
+fn tts_gptsovits_needs_reference_audio_not_key() {
+    let mut tts = VoiceTtsConfig {
+        enabled: true,
+        active: Some("gptsovits".to_string()),
+        ..Default::default()
+    };
+    assert!(!tts.is_active(), "no reference audio yet");
+    tts.gptsovits.ref_audio_path = "/opt/refs/aimisi.wav".to_string();
+    assert!(tts.is_active(), "self-hosted needs no api key");
+    assert!(tts.provider_has_key("gptsovits"));
+
+    // 旧配置(没有 gptsovits 节)读进来要带全缺省值。
+    let parsed: VoiceTtsConfig = serde_json::from_str(r#"{"enabled":true}"#).unwrap();
+    assert_eq!(parsed.gptsovits.base_url, "http://127.0.0.1:9880");
+    assert_eq!(parsed.gptsovits.timeout_seconds, 180);
+    assert_eq!(parsed.gptsovits.text_lang, "zh");
+    assert_eq!(parsed.gptsovits.prompt_lang, "zh");
+    assert_eq!(parsed.gptsovits.text_split_method, "cut5");
+    assert_eq!(parsed.gptsovits.media_type, "wav");
+    assert_eq!(parsed.gptsovits.speed_factor, 1.0);
+    assert!(parsed.gptsovits.aux_ref_audio_paths.is_empty());
+    // 缺省下没有参考音频,所以没激活。
+    assert!(!parsed.is_active());
+}
