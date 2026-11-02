@@ -959,7 +959,9 @@
           path: "voice.tts.gptsovits.text_lang",
           label: t("文本语言"),
           kind: "select",
-          choices: ["zh", "en", "ja", "ko", "yue", "auto"],
+          // all_* 表示整段强制按该语种处理；不带 all_ 的是多语种混合模式，
+          // 遇到别的语种片段会切分，混合文本更容易在切分点失败。
+          choices: ["zh", "all_zh", "en", "ja", "all_ja", "ko", "all_ko", "yue", "all_yue", "auto", "auto_yue"],
           default: "zh",
           showWhen: { key: "voice.tts.active", value: "gptsovits" },
         },
@@ -967,7 +969,9 @@
           path: "voice.tts.gptsovits.prompt_lang",
           label: t("参考音频语言"),
           kind: "select",
-          choices: ["zh", "en", "ja", "ko", "yue", "auto"],
+          // all_* 表示整段强制按该语种处理；不带 all_ 的是多语种混合模式，
+          // 遇到别的语种片段会切分，混合文本更容易在切分点失败。
+          choices: ["zh", "all_zh", "en", "ja", "all_ja", "ko", "all_ko", "yue", "all_yue", "auto", "auto_yue"],
           default: "zh",
           showWhen: { key: "voice.tts.active", value: "gptsovits" },
         },

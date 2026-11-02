@@ -16,7 +16,24 @@ use miyu_base::config::{MiniMaxTtsConfig, VoiceTtsConfig, TTS_PROVIDERS};
 use miyu_hosts::web::voice_tts::{MIMO_MODELS, MIMO_VOICES};
 
 /// GPT-SoVITS 支持的语言(api_v2 的 `text_lang` / `prompt_lang` 取值)。
-const GPTSOVITS_LANGS: &[&str] = &["zh", "en", "ja", "ko", "yue", "auto"];
+/// 取值来自 `GPT_SoVITS/TTS_infer_pack/TTS.py` 的 `v2_languages`。
+///
+/// `zh` 与 `all_zh` 不是一回事:`zh` 是多语种混合模式,遇到英文/日文片段会
+/// 自动切语种;`all_*` 强制整段按该语种处理。混着英文的文本用 `zh` 时
+/// 容易在切分点失败(实测含 "GPT-SoVITS" 这样的词会 400),`all_zh` 更稳。
+const GPTSOVITS_LANGS: &[&str] = &[
+    "zh",
+    "all_zh",
+    "en",
+    "ja",
+    "all_ja",
+    "ko",
+    "all_ko",
+    "yue",
+    "all_yue",
+    "auto",
+    "auto_yue",
+];
 
 /// GPT-SoVITS 的切句方式。短句用 cut5,长文用 cut3 更稳。
 const GPTSOVITS_SPLITS: &[&str] = &["cut0", "cut1", "cut2", "cut3", "cut4", "cut5"];
