@@ -1,11 +1,16 @@
 //! 入站 QQ 语音消息 → 文字。
 //!
 //! 语音段本身只有一个文件名,模型看不见内容。这里在建 inbound_event 之前
-//! 把它转成文字接进正文:NapCat `get_record`(要 wav)→ daemon 的语音前端
-//! (`miyu-voice`,SenseVoice)转写 → `[语音] 文本`。语音前端没开、没装、
-//! 取不到文件、转写失败——一律静默退化成 `[语音消息]` 占位,不打扰任何人
-//! (09-05 用户裁定:缺东西应该静默)。转过的语音段从 media 里摘掉,免得
-//! 历史库里 `[语音] 文本` 后面再挂一个 `[audio id=…]`。
+//! 把它转成文字接进正文。两条路,按顺序试:
+//!
+//! 1. 协议端自带的语音转文字(SnowLuma `fetch_ptt_text`):QQ 官方在客户端
+//!    就把语音转好了,一次 RPC 拿回文本,不用下模型、不用转码,最快也最准。
+//! 2. 本地兜底:`get_record` 取音频 → daemon 语音前端(`miyu-voice`,
+//!    SenseVoice)转写。协议端没这个扩展或转不出结果时用。
+//!
+//! 两条都失败就静默退化成 `[语音消息]` 占位,不打扰任何人(09-05 用户裁定:
+//! 缺东西应该静默)。转过的语音段从 media 里摘掉,免得历史库里 `[语音] 文本`
+//! 后面再挂一个 `[audio id=…]`。
 
 use crate::platforms::onebot::*;
 
@@ -17,6 +22,7 @@ const MAX_RECORD_BYTES: usize = 20 * 1024 * 1024;
 pub(in crate::platforms::onebot) async fn attach_voice_transcripts(
     state: &DaemonState,
     conn: &ConnectionHandle,
+    message_id: Option<i64>,
     parsed: &mut InboundMessage,
 ) {
     if !parsed
@@ -38,7 +44,29 @@ pub(in crate::platforms::onebot) async fn attach_voice_transcripts(
     let stt_ready = crate::runtime::voice_port().is_some_and(|port| port.stt_available());
     let mut lines = Vec::new();
     for media in voices.iter().take(MAX_VOICE_SEGMENTS) {
-        let transcript = if stt_ready {
+        // 协议端转写优先:它不用模型、不用转码,拿的就是 QQ 自己那份结果。
+        let protocol_text = match message_id {
+            Some(id) => match fetch_ptt_text(conn, id).await {
+                Ok(text) => text,
+                Err(error) => {
+                    tracing::debug!(
+                        target: "miyu::qq",
+                        error = %error,
+                        message_id = id,
+                        "{}",
+                        t(
+                            "QQ protocol endpoint had no voice transcript",
+                            "协议端没有语音转写结果"
+                        )
+                    );
+                    String::new()
+                }
+            },
+            None => String::new(),
+        };
+        let transcript = if !protocol_text.trim().is_empty() {
+            protocol_text
+        } else if stt_ready {
             match transcribe_record(state, conn, media).await {
                 Ok(text) => text,
                 Err(error) => {
@@ -68,6 +96,25 @@ pub(in crate::platforms::onebot) async fn attach_voice_transcripts(
         parsed.text = format!("{}\n{addition}", parsed.text.trim_end());
     }
     parsed.text_chars = parsed.text.chars().count();
+}
+
+/// 协议端自带的语音转文字(SnowLuma `fetch_ptt_text`)。返回空串表示协议端
+/// 认了这次调用但没有转写结果(常见于非语音消息或 QQ 没给这条做转写)。
+async fn fetch_ptt_text(conn: &ConnectionHandle, message_id: i64) -> Result<String> {
+    let data = conn
+        .call_api_with_timeout(
+            "fetch_ptt_text",
+            json!({ "message_id": message_id }),
+            FILE_DOWNLOAD_TIMEOUT,
+        )
+        .await
+        .context("fetch_ptt_text")?;
+    Ok(data
+        .get("text")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .trim()
+        .to_string())
 }
 
 /// `get_record` 要 wav → 三种来源(base64 / 桥本机路径 / 直链)按顺序试 →
