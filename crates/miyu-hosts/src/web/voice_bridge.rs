@@ -90,10 +90,11 @@ pub(crate) fn worker_running() -> bool {
 
 /// `/api/voice/status` 与 IPC `VoiceStatus` 共用的状态快照。
 pub(crate) fn status(state: &DaemonState) -> Value {
-    let (enabled, tts_enabled, models_dir) = {
+    let (enabled, stt_only, tts_enabled, models_dir) = {
         let manager = state.manager.lock().unwrap();
         (
             manager.config.voice.enabled,
+            manager.config.voice.stt_only,
             manager.config.voice.tts.is_active(),
             state.paths.state_dir.join("models"),
         )
@@ -101,6 +102,7 @@ pub(crate) fn status(state: &DaemonState) -> Value {
     let binary = locate_binary();
     json!({
         "enabled": enabled,
+        "stt_only": stt_only,
         "tts": tts_enabled,
         "binary": binary.as_ref().map(|path| path.display().to_string()),
         "spawned": WORKER_PID.load(Ordering::Relaxed) != 0,
@@ -113,9 +115,9 @@ pub(crate) fn status(state: &DaemonState) -> Value {
 }
 
 /// daemon 启动时调用:语音开启才拉 worker。
-/// 语音唤醒或文本转语音任一开启都需要前端进程。
+/// 语音唤醒、纯转写或文本转语音任一开启都需要前端进程。
 fn worker_wanted(voice: &miyu_base::config::VoiceConfig) -> bool {
-    voice.enabled || voice.tts.enabled
+    voice.enabled || voice.stt_only || voice.tts.enabled
 }
 
 pub(crate) fn spawn_if_enabled(state: &DaemonState) {
@@ -715,8 +717,9 @@ async fn synthesize_to_cache(
 /// 语音识别当下能不能用:语音唤醒开着(识别模型随它加载)且前端已接上。
 /// 入站 QQ 语音转写用它决定"转"还是"静默留占位",不会去等前端拉起。
 pub(crate) fn stt_available(state: &DaemonState) -> bool {
-    let enabled = state.manager.lock().unwrap().config.voice.enabled;
-    enabled && ATTACH.lock().unwrap().is_some()
+    let voice = state.manager.lock().unwrap().config.voice.clone();
+    // 唤醒或纯转写模式都提供转写;两者都不开时前端不带识别模型。
+    (voice.enabled || voice.stt_only) && ATTACH.lock().unwrap().is_some()
 }
 
 /// 播报是否可用(daemon 内、开关开着、供应商激活)。平台工具注册用。

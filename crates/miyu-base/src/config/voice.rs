@@ -10,6 +10,11 @@ pub struct VoiceConfig {
     /// 语音唤醒开关:麦克风常开、唤醒词、听写。与 `tts.enabled` 独立。
     #[serde(default)]
     pub enabled: bool,
+    /// 纯转写模式:只加载识别模型响应外部转写请求(QQ 语音转文字),
+    /// 不开麦克风、不下唤醒词模型。开着时 `enabled` 可以是 false——
+    /// daemon 一样会拉起 miyu-voice,只是它不监听。
+    #[serde(default)]
+    pub stt_only: bool,
     /// 中文唤醒词,任意汉字,内部转拼音送 KWS 模型,不用重训。
     /// 唤醒词,可多个,任一命中即唤醒。配置里写数组或逗号分隔的字符串都行,
     /// 旧键名 `wake_keyword` 照样读。
@@ -349,6 +354,7 @@ impl Default for VoiceConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            stt_only: false,
             wake_keywords: default_wake_keywords(),
             wake_threshold: default_wake_threshold(),
             wake_boost: default_wake_boost(),

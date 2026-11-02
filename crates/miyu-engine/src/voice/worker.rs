@@ -33,6 +33,7 @@ use miyu_base::i18n::text as t;
 use miyu_base::paths::MiyuPaths;
 use miyu_core::ipc;
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -45,6 +46,9 @@ enum WorkerEvent {
     /// 信令连接断开:daemon 没了,worker 退出。
     AttachLost,
 }
+
+/// 纯转写模式(主循环启动时置位):模型下载跳过唤醒词/VAD,转写请求直答。
+static STT_ONLY: AtomicBool = AtomicBool::new(false);
 
 /// 从配置拼出管线参数。云端 STT 的供应商按 id 在 providers 里找。
 pub fn runtime_config(config: &AppConfig, paths: &MiyuPaths) -> Result<VoiceRuntimeConfig> {
@@ -157,7 +161,9 @@ pub fn models_dir(paths: &MiyuPaths) -> std::path::PathBuf {
 
 /// 模型缺失时现场下载;下载前后各发一条桌面通知,让人知道在忙什么。
 fn ensure_models_with_notice(dir: &std::path::Path) -> Result<()> {
-    if models::models_ready(dir) {
+    if models::models_ready(dir)
+        || (STT_ONLY.load(Ordering::Relaxed) && models::stt_models_ready(dir))
+    {
         return Ok(());
     }
     miyu_base::notify::notify(
@@ -168,7 +174,11 @@ fn ensure_models_with_notice(dir: &std::path::Path) -> Result<()> {
             models::DOWNLOAD_SIZE_HINT
         ),
     );
-    models::ensure_models(dir, &mut |stage| tracing::info!("{stage}"))?;
+    if STT_ONLY.load(Ordering::Relaxed) {
+        models::ensure_stt_models(dir, &mut |stage| tracing::info!("{stage}"))?;
+    } else {
+        models::ensure_models(dir, &mut |stage| tracing::info!("{stage}"))?;
+    }
     miyu_base::notify::notify(
         t("Miyu voice", "Miyu 语音"),
         t("speech models ready", "语音模型已就位"),
@@ -180,10 +190,12 @@ fn ensure_models_with_notice(dir: &std::path::Path) -> Result<()> {
 pub fn run_worker() -> Result<()> {
     let paths = MiyuPaths::new()?;
     let config = AppConfig::load_or_default(&paths)?;
-    // 语音唤醒关着(只开了播报)就不碰麦克风和识别模型:进程只管播放。
-    let wake_enabled = config.voice.enabled;
+    // 语音唤醒关着就不碰麦克风:纯转写只留转写通路,播报只管播放。
+    let wake_enabled = config.voice.enabled && !config.voice.stt_only;
+    let stt_only = config.voice.stt_only;
+    STT_ONLY.store(stt_only, Ordering::Relaxed);
     let runtime = runtime_config(&config, &paths)?;
-    if wake_enabled {
+    if wake_enabled || stt_only {
         ensure_models_with_notice(&runtime.models_dir)?;
     }
     let voice_config = config.voice.clone();
@@ -205,6 +217,8 @@ pub fn run_worker() -> Result<()> {
             })?;
     }
 
+    // 纯转写模式没有管线,离线引擎直接挂在这条线程上。
+    let mut transcribe_engine: Option<Box<dyn super::stt::SttEngine>> = None;
     let service = if wake_enabled {
         let (service, voice_events) = VoiceService::start(runtime)?;
         // 语音事件桥接线程。
@@ -217,9 +231,13 @@ pub fn run_worker() -> Result<()> {
                         return;
                     }
                 }
-            })?;
+        })?;
         Some(service)
     } else {
+        if stt_only {
+            tracing::info!("纯转写模式:不采集麦克风,只响应转写请求");
+            transcribe_engine = Some(new_offline_stt(&runtime)?);
+        }
         None
     };
     let control = |command: Control| {
@@ -248,7 +266,13 @@ pub fn run_worker() -> Result<()> {
     let device = service
         .as_ref()
         .map(|service| service.device_description.clone())
-        .unwrap_or_else(|| t("(wake off, playback only)", "(唤醒关闭,仅播报)").to_string());
+        .unwrap_or_else(|| {
+            if stt_only {
+                t("(transcription only, no microphone)", "(纯转写,不占用麦克风)").to_string()
+            } else {
+                t("(wake off, playback only)", "(唤醒关闭,仅播报)").to_string()
+            }
+        });
     tracing::info!("语音前端就绪:采集 {device}");
     send("voice.ready", json!({ "device": device }));
 
@@ -349,6 +373,23 @@ pub fn run_worker() -> Result<()> {
                         .get("wav_path")
                         .and_then(Value::as_str)
                         .unwrap_or_default();
+                    // 纯转写模式没有管线,借管线里闲置的模型在这条线程直答。
+                    if STT_ONLY.load(Ordering::Relaxed) {
+                        match transcribe_offline(transcribe_engine.as_mut(), path) {
+                            Ok(text) => send(
+                                "voice.transcribed",
+                                json!({ "request_id": request_id, "text": text }),
+                            ),
+                            Err(error) => {
+                                tracing::warn!("离线转写失败: {error:#}");
+                                send(
+                                    "voice.transcribed",
+                                    json!({ "request_id": request_id, "text": "", "error": format!("{error:#}") }),
+                                );
+                            }
+                        }
+                        continue;
+                    }
                     match load_wav_16k(path) {
                         Ok(samples) => control(Control::Transcribe {
                             request_id,
@@ -413,6 +454,53 @@ fn load_wav_16k(path: &str) -> Result<Vec<f32>> {
     }
     let mut resampler = super::mic::LinearResampler::new(rate, super::pipeline::SAMPLE_RATE);
     Ok(resampler.process(&samples))
+}
+
+/// 纯转写模式的独立识别引擎(不走管线,不占麦克风)。
+fn new_offline_stt(config: &super::VoiceRuntimeConfig) -> Result<Box<dyn super::stt::SttEngine>> {
+    Ok(match &config.stt {
+        super::SttChoice::Local { threads, language } => Box::new(
+            super::stt::LocalSenseVoice::new(&config.models_dir, *threads, language)?,
+        ),
+    })
+}
+
+/// 离线转写一个 wav 文件:读入、重采样、直答。
+fn transcribe_offline(
+    engine: Option<&mut Box<dyn super::stt::SttEngine>>,
+    path: &str,
+) -> Result<String> {
+    let engine = engine.context("纯转写引擎未就绪")?;
+    let bytes = std::fs::read(path)?;
+    // NapCat 不一定听 out_format 的话(QQ 语音常给 mp3/silk):WAV 直解,
+    // 其余借 ffmpeg 落到 16k 单声道 wav 再解。
+    let (rate, samples) = match super::stt::decode_wav(&bytes) {
+        Ok(decoded) => decoded,
+        Err(_) => decode_via_ffmpeg(&bytes)?,
+    };
+    let samples = if rate == super::pipeline::SAMPLE_RATE {
+        samples
+    } else {
+        super::mic::LinearResampler::new(rate, super::pipeline::SAMPLE_RATE).process(&samples)
+    };
+    Ok(engine.transcribe(super::pipeline::SAMPLE_RATE, &samples)?)
+}
+
+/// 非 WAV 音频 → 16k 单声道 16-bit PCM WAV(ffmpeg)。
+fn decode_via_ffmpeg(bytes: &[u8]) -> Result<(u32, Vec<f32>)> {
+    use std::io::Write;
+    let mut input = tempfile::Builder::new().suffix(".audio").tempfile()?;
+    input.write_all(bytes)?;
+    let output = tempfile::Builder::new().suffix(".wav").tempfile()?;
+    let status = std::process::Command::new("ffmpeg")
+        .args(["-loglevel", "error", "-y", "-i"])
+        .arg(input.path())
+        .args(["-ar", "16000", "-ac", "1", "-sample_fmt", "s16"])
+        .arg(output.path())
+        .status()
+        .context("启动 ffmpeg 失败(系统未装 ffmpeg?)")?;
+    anyhow::ensure!(status.success(), "ffmpeg 转码失败(exit {status})");
+    Ok(super::stt::decode_wav(&std::fs::read(output.path())?)?)
 }
 
 /// 信令连接:注册 VoiceAttach,读信令写事件,直到断开。

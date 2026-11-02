@@ -66,6 +66,12 @@ pub fn models_ready(models_dir: &Path) -> bool {
     .all(|path| path.is_file())
 }
 
+/// 纯转写模式只需要识别模型,不要 VAD 和唤醒词。
+pub fn stt_models_ready(models_dir: &Path) -> bool {
+    let sense = sense_voice_paths(models_dir);
+    sense.model.is_file() && sense.tokens.is_file()
+}
+
 /// 下载缺失的模型。阻塞调用,progress 每个阶段回调一次(给 TUI/CLI
 /// 打进度行)。已就位的部分跳过,失败时不留半成品目录。
 pub fn ensure_models(models_dir: &Path, progress: &mut dyn FnMut(&str)) -> Result<()> {
@@ -94,6 +100,27 @@ pub fn ensure_models(models_dir: &Path, progress: &mut dyn FnMut(&str)) -> Resul
         )?;
     }
     if !models_ready(models_dir) {
+        bail!(
+            "模型下载后校验失败:关键文件缺失,请删除 {} 后重试",
+            models_dir.display()
+        );
+    }
+    Ok(())
+}
+
+/// 纯转写模式的模型就位:只管 SenseVoice,不碰 VAD/唤醒词。
+pub fn ensure_stt_models(models_dir: &Path, progress: &mut dyn FnMut(&str)) -> Result<()> {
+    std::fs::create_dir_all(models_dir)
+        .with_context(|| format!("创建模型目录 {}", models_dir.display()))?;
+    if !models_dir.join(SENSE_VOICE_DIR).is_dir() {
+        progress("下载 SenseVoice 识别模型 (156MB)…");
+        download_and_unpack(
+            &format!("{RELEASE_BASE}/asr-models/{SENSE_VOICE_DIR}.tar.bz2"),
+            models_dir,
+            SENSE_VOICE_DIR,
+        )?;
+    }
+    if !stt_models_ready(models_dir) {
         bail!(
             "模型下载后校验失败:关键文件缺失,请删除 {} 后重试",
             models_dir.display()
