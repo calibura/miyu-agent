@@ -297,6 +297,10 @@ async fn dispatch_ipc_connection(
                             // daemon 里真实生效的静态闸(§purge)。
                             "net_guard_bypassed":
                                 state.manager.lock().unwrap().config.purge.net_guard_bypassed(),
+                            // 白名单条数:0 = 没配 = 全放行。selfcheck 靠它区分
+                            // 「放行是全放行还是收窄过的」,不读配置自欺。
+                            "net_allowlist_len":
+                                miyu_engine::tools::net_guard::runtime_allowlist_len(),
                             "sandbox_passthrough":
                                 miyu_base::sandbox::purge_runtime_passthrough(),
                         }
@@ -482,9 +486,8 @@ async fn dispatch_ipc_connection(
             }
             // purge 旗标(§purge)随重载刷新:静态闸(net/沙盒直通)跟配置走,
             // 注入段由新回合的 Agent 构造期自行冻结,不在这里管。
-            miyu_engine::tools::net_guard::set_bypassed(
-                next_config.purge.net_guard_bypassed(),
-            );
+            miyu_engine::tools::net_guard::set_bypassed(next_config.purge.net_guard_bypassed());
+            miyu_engine::tools::net_guard::set_allowlist(next_config.purge.net_allow_entries());
             miyu_base::sandbox::set_purge_passthrough(next_config.purge.sandbox_bypassed());
             let (reply, receiver) = oneshot::channel();
             if state

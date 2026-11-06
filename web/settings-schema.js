@@ -1143,6 +1143,13 @@
           default: true,
         },
         {
+          path: "purge.net_allowlist",
+          label: t("出站白名单"),
+          hint: t("每行一个 IP 或完整主机名,也可写 账号@主机(账号仅用于识别写法)。主机名连同它解析出的地址一起放行。留空 = 放行不设限;填了就只放行名单内的主机。精确匹配,不做 *.example.com 通配。"),
+          kind: "string-list",
+          default: [],
+        },
+        {
           path: "purge.sandbox_passthrough",
           label: t("沙盒直通"),
           hint: t("子进程不再装 Landlock 规则集;策略照算照报,只是执行层放行"),

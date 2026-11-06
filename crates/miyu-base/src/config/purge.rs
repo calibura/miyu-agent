@@ -30,6 +30,17 @@ pub struct PurgeConfig {
     /// 出站抓取的地址闸门(SSRF 三件套)放行:web_images 下载与链接预览的
     /// DNS 解析判定改成「有解析结果就放行」。
     pub bypass_net_guard: bool,
+    /// 出站放行时的白名单（移植自 dsh-purge「自己的服务器」）。
+    ///
+    /// 每项一个 IP 或完整主机名；也接受 `账号@主机` 的写法（账号只用来认这种
+    /// 写法，不参与判定）。主机名连同它**当时解析出的地址**一起放行。
+    ///
+    /// 语义：`bypass_net_guard` 开着且本列表非空时，只放行白名单命中者，其余
+    /// 仍走原来的公网闸。列表为空则维持历史行为（全放行）——这样老配置升级
+    /// 上来不会有行为变化，想收紧就登记几条。
+    ///
+    /// 不要写密码、密钥、网段：这里只做地址比对。网段请写成具体的 IP。
+    pub net_allowlist: Vec<String>,
     /// 成员/`/sandbox` 会话的 Landlock 策略直通:策略照样算,但不再装进子进程。
     /// 沙盒面板(`<sandbox>` 尾巴、`/sandbox` 查看)照旧报策略,模型看到的
     /// 与实际生效保持一致。
@@ -45,6 +56,7 @@ impl Default for PurgeConfig {
             enabled: false,
             bypass_command_guards: true,
             bypass_net_guard: true,
+            net_allowlist: Vec::new(),
             sandbox_passthrough: true,
             boost: true,
         }
@@ -55,6 +67,16 @@ impl PurgeConfig {
     /// 配置里的子开关要不要生效:总开关关着,子开关一律当没写。
     fn effective(&self, bypass: bool) -> bool {
         self.enabled && bypass
+    }
+
+    /// 出站白名单的规范化条目:去空白、去空行、`账号@主机` 只留主机。
+    ///
+    /// 返回空 = 白名单没配,调用方按「全放行」处理(历史行为)。
+    pub fn net_allow_entries(&self) -> Vec<NetAllowEntry> {
+        self.net_allowlist
+            .iter()
+            .filter_map(|raw| NetAllowEntry::parse(raw))
+            .collect()
     }
 
     /// 注入文件在本机配置目录下的路径。
@@ -116,6 +138,38 @@ impl PurgeFlags {
 /// 注入文件路径:`<config_dir>/purge-inject.md`。
 pub fn inject_file_path(config_dir: &std::path::Path) -> PathBuf {
     config_dir.join(PURGE_INJECT_FILE)
+}
+
+/// 白名单条目。`账号@主机` 的账号部分在 parse 时剥掉,匹配只看主机。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NetAllowEntry {
+    /// 用户写的主机原文(IP 或主机名),小写化后存。
+    pub host: String,
+}
+
+impl NetAllowEntry {
+    /// 解析一条白名单。`账号@主机` 剥账号;空行/纯空白返回 None。
+    pub fn parse(raw: &str) -> Option<Self> {
+        let text = raw.trim();
+        if text.is_empty() {
+            return None;
+        }
+        // `账号@主机`:账号只用来认写法,不参与判定(dsh-purge 同语义)。
+        let host = text.rsplit('@').next().unwrap_or(text).trim();
+        if host.is_empty() || host.contains(char::is_whitespace) {
+            return None;
+        }
+        Some(Self {
+            host: host.to_ascii_lowercase(),
+        })
+    }
+
+    /// 与一个解析出的主机名/IP 字符串比对。IP 直接比字符串(调用方已把
+    /// `IpAddr` 转成规范文本);主机名不匹配后缀——`example.com` 不放行
+    /// `sub.example.com`,白名单是精确名单,不是通配。
+    pub fn matches(&self, host: &str) -> bool {
+        self.host == host.trim_end_matches('.').to_ascii_lowercase()
+    }
 }
 
 /// 读注入正文;文件缺失或空白返回 None。CRLF 归一成 LF(与 DSH 的

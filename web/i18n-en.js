@@ -381,6 +381,8 @@ window.MIYU_I18N_EN = Object.freeze({
   "人格列表加载失败:{message}": "Failed to load personas: {message}",
   "人格名 → 表情库名;default 键对应默认人格": "Persona name → meme library name; the default key maps to the default persona.",
   "人格名不匹配,已取消": "Persona name does not match; cancelled.",
+  "出站白名单": "Outbound allowlist",
+  "每行一个 IP 或完整主机名,也可写 账号@主机(账号仅用于识别写法)。主机名连同它解析出的地址一起放行。留空 = 放行不设限;填了就只放行名单内的主机。精确匹配,不做 *.example.com 通配。": "One IP or full hostname per line; account@host is also accepted (the account part only marks the form). A hostname is allowed together with whatever address it resolves to at the time. Empty means the bypass is unlimited; once you add entries, only hosts on this list are allowed. Exact match, no *.example.com wildcards.",
   "Purge 模式": "Purge mode",
   "启用 purge": "Enable purge",
   "总开关。关着时所有挂接点与上游逐字节一致,零行为变化;子开关一律无效": "Master switch. Off means every hook is byte-identical to upstream with zero behaviour change; the sub-switches do nothing.",

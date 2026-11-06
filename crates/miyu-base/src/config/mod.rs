@@ -35,7 +35,7 @@ pub use platform::*;
 pub use platform_plugins::*;
 pub use pool_ref::*;
 pub use provider::*;
-pub use purge::{PurgeConfig, PurgeFlags};
+pub use purge::{NetAllowEntry, PurgeConfig, PurgeFlags};
 pub use subsystems::EnabledSubsystems;
 pub use tool_plugins::*;
 pub use voice::*;

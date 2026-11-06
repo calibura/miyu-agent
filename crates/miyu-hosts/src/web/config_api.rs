@@ -595,6 +595,7 @@ pub(in crate::web) fn rebuild_for_config(
     // 命令闸（rm 闸与 command_deny）不用管：它每轮从 manager.config 现读，
     // 下面那行赋值之后自然就生效。
     miyu_engine::tools::net_guard::set_bypassed(next_config.purge.net_guard_bypassed());
+    miyu_engine::tools::net_guard::set_allowlist(next_config.purge.net_allow_entries());
     miyu_base::sandbox::set_purge_passthrough(next_config.purge.sandbox_bypassed());
     manager.config = next_config;
     manager.context = context;

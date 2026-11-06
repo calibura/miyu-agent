@@ -34,6 +34,7 @@ mod line_diff;
 pub mod memes;
 mod memory;
 pub mod net_guard;
+mod net_guard_allowlist;
 mod patch_preview;
 pub mod platform_outreach;
 mod readable_names;

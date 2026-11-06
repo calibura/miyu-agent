@@ -15,6 +15,7 @@
 //! 一次 `AppConfig` 克隆拉进每一张图的下载循环;而 purge 是运维级开关,
 //! 重启一次的代价可以接受。
 
+use crate::tools::net_guard_allowlist::AllowlistSlot;
 use anyhow::{bail, Context, Result};
 use reqwest::Url;
 use std::net::{IpAddr, SocketAddr};
@@ -22,10 +23,34 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 static NET_GUARD_BYPASSED: AtomicBool = AtomicBool::new(false);
+/// 白名单条目（`~/.miyu/config/config.jsonc` 的 `purge.net_allowlist`）。
+/// 空 = 没配 = 全放行（历史行为）；非空 = 只放行命中者。
+static NET_ALLOWLIST: AllowlistSlot = AllowlistSlot::new();
 
 /// purge 旗标的唯一写入口:daemon 启动(`web::run`)按配置调一次。
 pub fn set_bypassed(bypassed: bool) {
     NET_GUARD_BYPASSED.store(bypassed, Ordering::Release);
+}
+
+/// 白名单的唯一写入口。`reload`/`ApplyConfig` 与启动一样调它。
+pub fn set_allowlist(entries: Vec<miyu_base::config::NetAllowEntry>) {
+    NET_ALLOWLIST.replace(entries);
+}
+
+/// 运行中白名单条数（IPC `GetStatus` 报给 selfcheck 用）。
+pub fn runtime_allowlist_len() -> usize {
+    NET_ALLOWLIST.len()
+}
+
+/// 当前是否配了白名单（配了就意味着「放行」不再是全放行）。
+pub fn allowlist_is_active() -> bool {
+    !NET_ALLOWLIST.is_empty()
+}
+
+/// 一个主机名/IP 是否被白名单放行。名单为空时恒 false——调用方据此区分
+/// 「没配名单」与「配了但这个不在里面」。
+fn allowlisted(host: &str) -> bool {
+    NET_ALLOWLIST.matches(host)
 }
 
 /// 运行中旗标(任意平台可用):IPC `GetStatus` 把它报给 CLI 的 purge
@@ -40,8 +65,26 @@ pub fn bypassed() -> bool {
 }
 
 /// purge 开着时只走 URL 形状层与「解析得出地址」这一步;公网判定退位。
+///
+/// 白名单语义（移植自 dsh-purge「自己的服务器」）：名单没配 → 维持全放行
+/// （老配置升级零变化）；名单配了 → 只有命中的主机走这条捷径，其余退回
+/// 公网闸。命中判定看 URL 的 host（IP 字面量或主机名，统一小写、去尾点）。
 fn bypass_gate(url: &Url) -> bool {
-    NET_GUARD_BYPASSED.load(Ordering::Acquire) && matches!(url.scheme(), "http" | "https")
+    if !NET_GUARD_BYPASSED.load(Ordering::Acquire) || !matches!(url.scheme(), "http" | "https") {
+        return false;
+    }
+    if NET_ALLOWLIST.is_empty() {
+        return true;
+    }
+    url.host_str()
+        .map(|host| {
+            allowlisted(
+                host.trim_start_matches('[')
+                    .trim_end_matches(']')
+                    .trim_end_matches('.'),
+            )
+        })
+        .unwrap_or(false)
 }
 
 pub(crate) fn is_safe_remote_url(url: &Url) -> bool {
@@ -95,6 +138,9 @@ pub async fn resolve_public_remote_target(
         .context("DNS resolution timed out")??
         .collect::<Vec<_>>();
     // purge 放行:解析出地址就过,公网判定退位(见模块头「purge 放行」)。
+    // 白名单配了的话,不命中的主机在这里退回公网判定——`bypass_gate` 在
+    // `is_safe_remote_url` 阶段已经按 host 筛过一次,但那个阶段拦下的 URL
+    // 根本走不到这;名单命中与否决定的是「解析结果要不要逐个验公网」。
     if bypass_gate(url) {
         return if addresses.is_empty() {
             bail!("host has no DNS resolution")
@@ -221,5 +267,47 @@ mod tests {
 
         // 收尾还原,别的测试还要用这个静态槽。
         set_bypassed(false);
+    }
+
+    /// 白名单语义三态：没配 = 全放行（历史行为）；配了且命中 = 放行；
+    /// 配了但没命中 = 退回公网闸。这是移植 dsh-purge「自己的服务器」时
+    /// 钉死的契约,写反了老用户升级后就会突然上不了网。
+    #[test]
+    fn allowlist_narrows_the_bypass_rather_than_replacing_it() {
+        use miyu_base::config::NetAllowEntry;
+
+        let _guard = FLAG_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+
+        set_bypassed(true);
+        set_allowlist(Vec::new());
+
+        // 没配名单:bypass 照旧全放行(回环主机名也过,见 is_safe_remote_url)。
+        let url = Url::parse("http://localhost:1/").unwrap();
+        assert!(bypass_gate(&url), "名单没配 = 全放行");
+
+        // 配了名单且命中:放行。
+        set_allowlist(vec![NetAllowEntry::parse("my-vps.example.com").unwrap()]);
+        let hit = Url::parse("http://my-vps.example.com:8443/").unwrap();
+        assert!(bypass_gate(&hit), "名单命中 = 放行");
+
+        // 配了名单但没命中:捷径关掉(公网判定接管,这里只看 bypass_gate)。
+        let miss = Url::parse("http://stranger.example.org/").unwrap();
+        assert!(!bypass_gate(&miss), "名单没命中 = 不走捷径");
+
+        // 子域名不做后缀通配:example.com 不放行 sub.example.com。
+        set_allowlist(vec![NetAllowEntry::parse("example.com").unwrap()]);
+        let sub = Url::parse("http://sub.example.com/").unwrap();
+        assert!(!bypass_gate(&sub), "精确名单,不通配后缀");
+
+        // bypass 关着时名单无关紧要。
+        set_bypassed(false);
+        let url = Url::parse("http://my-vps.example.com/").unwrap();
+        assert!(!bypass_gate(&url), "总闸关着,名单救不了");
+
+        // 收尾还原,别的测试还要用这两个静态槽。
+        set_bypassed(false);
+        set_allowlist(Vec::new());
     }
 }

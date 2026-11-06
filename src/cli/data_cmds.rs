@@ -391,9 +391,7 @@ fn purge_probe_path(paths: &MiyuPaths) -> PathBuf {
 /// 向运行中的 daemon 查 purge 运行时旗标(GetStatus 的 `purge` 块)。
 /// 返回 (net_guard_bypassed, sandbox_passthrough);daemon 没在跑或旧版没带
 /// 这个块时按 Err 处理,由调用方退回配置期望值。
-pub(in crate::cli) async fn purge_runtime_flags(
-    paths: &MiyuPaths,
-) -> Result<(bool, bool)> {
+pub(in crate::cli) async fn purge_runtime_flags(paths: &MiyuPaths) -> Result<(bool, bool)> {
     let (_, data) = send_ipc_admin(paths, IpcCommand::GetStatus).await?;
     let purge = data
         .get("purge")
@@ -444,6 +442,32 @@ pub(in crate::cli) async fn run_purge(paths: &MiyuPaths, args: PurgeArgs) -> Res
                 &t("sandbox passthrough", "沙盒直通"),
                 flags.sandbox_bypassed,
             );
+            // 白名单：0 条 = 没配 = 放行是全放行；非 0 = 只放行名单内的主机。
+            // 这条要单独说清楚，否则「出站闸放行 ✓」看着像 carte blanche。
+            let allow = purge.net_allow_entries();
+            println!(
+                "  {}: {}",
+                t("net allowlist", "出站白名单"),
+                if allow.is_empty() {
+                    t(
+                        "empty — bypass allows every host",
+                        "空——放行不设限（全部主机）",
+                    )
+                    .to_string()
+                } else {
+                    format!(
+                        "{} {}",
+                        allow.len(),
+                        t(
+                            "host(s) — bypass is limited to these",
+                            "条——放行只对名单内主机生效"
+                        )
+                    )
+                }
+            );
+            for entry in &allow {
+                println!("    · {}", entry.host);
+            }
             println!(
                 "{}: {}",
                 t("inject file", "注入文件"),

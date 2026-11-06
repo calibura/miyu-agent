@@ -13,6 +13,7 @@ pub async fn run(paths: MiyuPaths, args: WebArgs) -> Result<()> {
     // purge 旗标(§purge)在启动时折一次:net 闸与沙盒直通是静态的,改配置
     // 重启生效。注入段由 Agent 构造期自行冻结,不走这里。
     miyu_engine::tools::net_guard::set_bypassed(config.purge.net_guard_bypassed());
+    miyu_engine::tools::net_guard::set_allowlist(config.purge.net_allow_entries());
     miyu_base::sandbox::set_purge_passthrough(config.purge.sandbox_bypassed());
     tools::jobs::init(&paths);
     // 子代理断点续传落盘目录(09-12):检查点写盘,daemon 重启后 resume_id 仍有效。
