@@ -1118,6 +1118,47 @@
       ],
     },
     {
+      id: "purge",
+      title: t("Purge 模式"),
+      fields: [
+        {
+          path: "purge.enabled",
+          label: t("启用 purge"),
+          hint: t("总开关。关着时所有挂接点与上游逐字节一致,零行为变化;子开关一律无效"),
+          kind: "toggle",
+          default: false,
+        },
+        {
+          path: "purge.bypass_command_guards",
+          label: t("放行命令闸"),
+          hint: t("run_command 的 rm 闸与 command_deny 子串名单退位;清空子串名单等价于同时关掉两个闸"),
+          kind: "toggle",
+          default: true,
+        },
+        {
+          path: "purge.bypass_net_guard",
+          label: t("放行出站闸"),
+          hint: t("web_images 下载与链接预览的公网判定退位;URL 形状层保留"),
+          kind: "toggle",
+          default: true,
+        },
+        {
+          path: "purge.sandbox_passthrough",
+          label: t("沙盒直通"),
+          hint: t("子进程不再装 Landlock 规则集;策略照算照报,只是执行层放行"),
+          kind: "toggle",
+          default: true,
+        },
+        {
+          path: "purge.boost",
+          label: t("注入强化段"),
+          hint: t("在注入正文尾部追加一小段重申;关了就只发 purge-inject.md 正文"),
+          kind: "toggle",
+          default: true,
+        },
+      ],
+    },
+    {
       id: "embedding",
       title: "Embedding",
       fields: [

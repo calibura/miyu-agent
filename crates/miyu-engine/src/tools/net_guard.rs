@@ -189,4 +189,37 @@ mod tests {
             assert!(result.is_err(), "{bad} must stay denied under bypass");
         }
     }
+
+    /// 旗标必须能从配置现折,而不是只在进程启动时折一次。
+    ///
+    /// WebUI 的设置页保存走 `ApplyConfig`(config_api.rs),和 IPC 的
+    /// `ReloadConfig` 是两条路。2026-11-06 加 purge 面板时发现前者压根不刷新
+    /// 这两个静态旗标:用户在面板上点了开关,jsonc 写了、界面也显示开着,
+    /// 实际一点没生效,非要重启 daemon 才认。这条测试钉住「配置变 → 旗标变」
+    /// 这个契约,免得哪天又被绕过。
+    #[test]
+    fn the_flag_follows_the_config_rather_than_the_process() {
+        use miyu_base::config::{AppConfig, PurgeConfig};
+
+        let _guard = FLAG_LOCK
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+
+        let mut config = AppConfig::default();
+        config.purge = PurgeConfig {
+            enabled: true,
+            bypass_net_guard: true,
+            ..PurgeConfig::default()
+        };
+        set_bypassed(config.purge.net_guard_bypassed());
+        assert!(config.purge.net_guard_bypassed(), "enabled + 子开关 = 放行");
+
+        // 关掉总开关,子开关再真也不该放行。
+        config.purge.enabled = false;
+        set_bypassed(config.purge.net_guard_bypassed());
+        assert!(!config.purge.net_guard_bypassed(), "总开关关着,子开关无效");
+
+        // 收尾还原,别的测试还要用这个静态槽。
+        set_bypassed(false);
+    }
 }

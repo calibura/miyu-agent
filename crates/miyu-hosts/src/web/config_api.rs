@@ -586,6 +586,16 @@ pub(in crate::web) fn rebuild_for_config(
             .persona_session_ids
             .insert(next_scope, target_session_id.clone());
     }
+    // purge 的两个静态旗标（出站闸、沙盒直通）不随 Actor 配置走，它们住在
+    // process 的静态槽里，只有启动和 ReloadConfig 会折。WebUI 保存走的是
+    // ApplyConfig 这条路，所以必须在这里补一刀——否则用户在设置页点了
+    // 「放行出站闸」，jsonc 写了、面板也显示开着，实际一点没生效，非要重启
+    // daemon 才认。2026-11-06 加 purge 的 WebUI 面板时发现并补上。
+    //
+    // 命令闸（rm 闸与 command_deny）不用管：它每轮从 manager.config 现读，
+    // 下面那行赋值之后自然就生效。
+    miyu_engine::tools::net_guard::set_bypassed(next_config.purge.net_guard_bypassed());
+    miyu_base::sandbox::set_purge_passthrough(next_config.purge.sandbox_bypassed());
     manager.config = next_config;
     manager.context = context;
     drop(manager);
