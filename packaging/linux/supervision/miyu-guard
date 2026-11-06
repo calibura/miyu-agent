@@ -1,0 +1,100 @@
+#!/bin/bash
+# 保证「有一个受 systemd 监管的 daemon 在跑」。
+#
+# v2 修正（2026-11-03）:
+#   旧版把 is-active != active 一律当成「有野 daemon 占端口」,于是 systemd 正常的
+#   deactivating/activating 过渡态也被当成敌情,而 reclaim 又用
+#   `pgrep -f "miyu __daemon"` 把 **systemd 自己监管的那个 daemon** 一起 SIGKILL。
+#   配合 daemon「端口被占就 exit(0) 让位」,形成自持循环:
+#       监管实例被 guard 杀掉 -> 野 daemon 占端口 -> started 的实例让位 exit(0)
+#       -> Restart=on-failure 不重启 -> 30 秒后 guard 再捞一次 …… 无限转
+#
+#   本版两条硬规则:
+#     1. active / activating / deactivating / reloading / refreshing 一律不动手,
+#        过渡态最多等它自己走完(有上限)。
+#     2. 只杀 cgroup 不含本 unit 的进程。cgroup 里有 miyu.service 的,是 systemd
+#        的合法子民,永远不碰。
+set -u
+export HOME=/home/nakami
+export XDG_RUNTIME_DIR=/run/user/1000
+unset MIYU_HOME
+
+UNIT=miyu.service
+PORT=8300
+PAUSE_MARK=/home/nakami/.miyu/supervision-paused
+LOG_TAG="miyu-guard"
+
+log() { echo "$(date -Is) $*"; }
+
+# 有意暂停:建 supervision-paused 就什么都不做。
+if [ -e "$PAUSE_MARK" ]; then
+  exit 0
+fi
+
+# ① 过渡态:等它自己走完,不介入。
+wait_transition() {
+  local i state
+  for i in $(seq 1 40); do            # 最多等 40 秒
+    state=$(systemctl --user is-active "$UNIT" 2>/dev/null)
+    case "$state" in
+      active) return 0 ;;
+      activating|deactivating|reloading|refreshing)
+        sleep 1
+        ;;
+      *) return 1 ;;                   # inactive/failed/maintenance 等
+    esac
+  done
+  return 1
+}
+
+state=$(systemctl --user is-active "$UNIT" 2>/dev/null)
+case "$state" in
+  active)
+    exit 0 ;;
+  activating|deactivating|reloading|refreshing)
+    wait_transition && exit 0
+    state=$(systemctl --user is-active "$UNIT" 2>/dev/null)
+    case "$state" in active) exit 0 ;; esac
+    ;;
+esac
+
+# ② 找候选 daemon:只认不在本 unit cgroup 里的那些(即真正的野 daemon)。
+wild_daemons() {
+  local pid cg
+  for pid in $(pgrep -f "miyu __daemon" 2>/dev/null); do
+    [ "$pid" = "$$" ] && continue
+    cg=$(cat "/proc/$pid/cgroup" 2>/dev/null || true)
+    case "$cg" in
+      *"/$UNIT"*) : ;;                # systemd 的,跳过
+      *) echo "$pid" ;;
+    esac
+  done
+}
+
+port_busy() { ss -ltn 2>/dev/null | grep -q ":$PORT "; }
+
+candidates=$(wild_daemons | tr '\n' ' ')
+if [ -z "${candidates// /}" ] && ! port_busy; then
+  log "unit is '$state'; no wild daemon and :$PORT free -> plain start"
+else
+  log "unit is '$state'; wild daemon(s)=[${candidates% }] port_busy=$(port_busy && echo yes || echo no) -> reclaim"
+  for pid in $candidates; do
+    log "reclaim: SIGTERM $pid"
+    kill -TERM "$pid" 2>/dev/null
+  done
+  for i in $(seq 1 20); do
+    if ! port_busy && [ -z "$(wild_daemons | tr -d '[:space:]')" ]; then
+      break
+    fi
+    sleep 1
+  done
+  for pid in $(wild_daemons); do
+    log "reclaim: SIGKILL $pid"
+    kill -KILL "$pid" 2>/dev/null
+  done
+  sleep 1
+fi
+
+systemctl --user reset-failed "$UNIT" 2>/dev/null
+systemctl --user start "$UNIT"
+log "start rc=$?; now $(systemctl --user is-active "$UNIT" 2>/dev/null)"

@@ -1,0 +1,39 @@
+[Unit]
+Description=Miyu assistant daemon (WebUI + QQ platform)
+Documentation=https://github.com/SHORiN-KiWATA/miyu-agent
+After=network-online.target
+Wants=network-online.target
+# 不限速:崩溃自愈要一直有效,不要因为连续失败几次就永久放弃。真出问题时
+# 每次重启都在 journal 里留痕,不会静默。systemd 的默认值是 10 秒内 5 次
+# 就进 failed,那种"崩了 5 次之后彻底躺平"正是无人值守最怕的形态。
+StartLimitIntervalSec=0
+StartLimitBurst=0
+
+[Service]
+Type=simple
+# 必须带这个标记:daemon 入口在没有它时会挂 PR_SET_PDEATHSIG,并且一旦发现
+# getppid()==1 就立即 exit(0)。systemd Type=simple 下父进程正是 PID 1,
+# 少了它服务会瞬间"启动成功"然后自己退出,永远起不来。
+Environment=MIYU_DAEMON_DETACHED=1
+Environment=HOME=/home/nakami
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+# 刻意**不设** MIYU_HOME:设了会把 IPC runtime 目录从 /run/user/1000/miyu
+# 改成 /run/user/1000/miyu-<hash>，于是手工起的 daemon、shell hook、WebUI
+# 全都找不到它（配置目录两者相同，但 socket 不同，互 ping 不到）。这也是
+# 上一次交接失败的根因。
+Environment=PATH=/home/nakami/.cargo/bin:/home/nakami/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=LANG=zh_CN.UTF-8
+WorkingDirectory=/home/nakami
+ExecStart=/usr/bin/miyu __daemon --port 8300
+# 正常关停(IPC shutdown,退出码 0)不重启——尊重 `miyu daemon stop` 的意图;
+# 崩溃、panic、被 OOM/信号杀掉才自动拉起。
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+StandardInput=null
+SyslogIdentifier=miyu-daemon
+
+[Install]
+WantedBy=default.target

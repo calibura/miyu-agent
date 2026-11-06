@@ -1,0 +1,7 @@
+[Unit]
+Description=Keep the Miyu daemon under systemd supervision
+After=miyu.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/miyu-guard
