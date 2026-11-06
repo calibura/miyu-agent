@@ -8,6 +8,7 @@
 //! | 1   | 回合失败(模型/工具/daemon 错误) |
 //! | 2   | 用法或参数错误(模型不存在、会话模式冲突、@文件读不到) |
 //! | 3   | 会话不存在 |
+//! | 75  | daemon 让位：同家目录已有在跑的 daemon，本次启动主动退出 |
 //! | 124 | 超时被取消(`--timeout`) |
 //! | 130 | 被用户/宿主取消(Ctrl+C、stdio cancel) |
 //!
@@ -19,6 +20,10 @@ use std::fmt;
 pub const EXIT_FAILURE: i32 = 1;
 pub const EXIT_USAGE: i32 = 2;
 pub const EXIT_SESSION_NOT_FOUND: i32 = 3;
+/// EX_TEMPFAIL。daemon 让位专用：占位方在跑不是本次进程的错，但也不算
+/// 成功——监督者（systemd `Restart=on-failure`）要能靠这个码把它和「正常
+/// 退出 0」区分开，否则一次让位就等于静默失去监管。
+pub const EXIT_DAEMON_STAND_DOWN: i32 = 75;
 pub const EXIT_TIMEOUT: i32 = 124;
 pub const EXIT_CANCELLED: i32 = 130;
 
@@ -65,6 +70,12 @@ pub fn exit_code_for(error: &anyhow::Error) -> i32 {
         return exit.code;
     }
     if error
+        .downcast_ref::<miyu_core::ipc::HomeDaemonStandDown>()
+        .is_some()
+    {
+        return EXIT_DAEMON_STAND_DOWN;
+    }
+    if error
         .downcast_ref::<crate::cli::repl::session::RemoteTurnCancelled>()
         .is_some()
     {
@@ -96,5 +107,12 @@ mod tests {
     fn remote_cancel_maps_to_130() {
         let error = anyhow::Error::new(crate::cli::repl::session::RemoteTurnCancelled::default());
         assert_eq!(exit_code_for(&error), EXIT_CANCELLED);
+    }
+
+    #[test]
+    fn daemon_stand_down_maps_to_75() {
+        let busy = miyu_core::ipc::HomeDaemonBusy { record: None };
+        let error = miyu_core::ipc::daemon_stand_down_error(busy);
+        assert_eq!(exit_code_for(&error), EXIT_DAEMON_STAND_DOWN);
     }
 }

@@ -39,7 +39,12 @@ pub async fn run(paths: MiyuPaths, web: WebArgs) -> Result<()> {
                 holder_pid = busy.record.as_ref().map(|record| record.pid),
                 "another daemon already owns this home directory; standing down"
             );
-            return Ok(());
+            // 让位不能是退出码 0：systemd 的 `Restart=on-failure` 只认非零码。
+            // 一旦让位按 0 退出，unit 就静默变 inactive，只能靠外部轮询（guard
+            // timer）每 30 秒把监管捡回来——占位方一死中间全是没人管的窗口，
+            // 而且若占位方本身就是野进程，就永远轮不回来了。EX_TEMPFAIL(75)：
+            // 占位方在跑不是本次进程的错，但确实没起来，监督者应当稍后重试。
+            return Err(miyu_core::ipc::daemon_stand_down_error(busy));
         }
     };
     crate::web::run(paths, web).await

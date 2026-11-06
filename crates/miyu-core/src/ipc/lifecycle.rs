@@ -64,9 +64,51 @@ pub struct HomeDaemonRecord {
 
 /// 抢不到锁时的结局。`record` 可能是 `None`：锁被持有但内容还没写完
 /// （对方正卡在抢到锁到写完之间的那一瞬），此时只知道「有人占着」。
+#[derive(Debug)]
 pub struct HomeDaemonBusy {
     pub record: Option<HomeDaemonRecord>,
 }
+
+/// daemon 让位时该返回的错误：正文复述占位信息，退出码固定
+/// [`EXIT_DAEMON_STAND_DOWN`](crate::ipc::EXIT_DAEMON_STAND_DOWN)。
+///
+/// 放在 miyu-core 而不是 miyu-hosts，是因为码本身是 IPC 生命周期层的约定
+/// （单例锁的语义），谁实现 daemon 宿主都得遵守；miyu-hosts 不依赖 CLI 层，
+/// 引不到 `cli::exit_code`。
+pub fn daemon_stand_down_error(busy: HomeDaemonBusy) -> anyhow::Error {
+    anyhow::Error::new(HomeDaemonStandDown { busy })
+}
+
+/// [`daemon_stand_down_error`] 背后的错误类型。`Display` 只写人话；码由
+/// CLI 层的 `exit_code_for` 通过 `downcast_ref` 取出。
+#[derive(Debug)]
+pub struct HomeDaemonStandDown {
+    busy: HomeDaemonBusy,
+}
+
+impl std::fmt::Display for HomeDaemonStandDown {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{}",
+            miyu_base::i18n::text(
+                "This home directory already has a running Miyu daemon; this process is standing down.",
+                "这个家目录已经有 Miyu daemon 在跑了；本进程让位退出。"
+            )
+        )?;
+        if let Some(record) = &self.busy.record {
+            write!(
+                formatter,
+                " pid={} runtime={}",
+                record.pid,
+                record.runtime_dir.display()
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for HomeDaemonStandDown {}
 
 impl Drop for DirectCoreLease {
     fn drop(&mut self) {
