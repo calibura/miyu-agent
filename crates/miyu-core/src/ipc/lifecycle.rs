@@ -564,9 +564,164 @@ fn daemon_ready_timeout() -> Duration {
 /// Shuts down a daemon left over from an older build so the caller can spawn
 /// one matching the current binary.
 pub(crate) async fn restart_stale_daemon(paths: &MiyuPaths, info: &DaemonInfo) -> Result<()> {
+    // 受 systemd 监管的 daemon 不能私杀私拉。09-21 起 daemon 归 `miyu.service`
+    // 管，可是一个跑着旧 build_id 的客户端（比如升级前就开着的 TUI）每次连上
+    // 都会认定「版本对不上」，于是走这里把 systemd 的 daemon 关掉、再用自己
+    // 的旧二进制拉一个裸进程。裸进程不在任何 unit 的 cgroup 里，guard 每 30
+    // 秒把它当野 daemon 收掉、systemctl 把 unit 拉回来；客户端下次再连，又
+    // 一轮。2026-11-06 本机上这个环转了整整一小时（17:19、17:34 各一轮）。
+    //
+    // 交给 systemd 就没有这个环：重启后 unit 的 `ExecStart` 用的是磁盘上那份
+    // 二进制，天然与「刚装好的新客户端」一致；而且重启动作由监督者执行，谁是
+    // 主人一目了然。
+    if let Some(unit) = supervising_unit(info.pid) {
+        return restart_under_systemd(paths, &unit, info).await;
+    }
     shutdown_daemon(paths, info)
         .await
         .context("waiting for the outdated Miyu daemon to stop")
+}
+
+/// 一个 daemon 进程所处的 systemd unit。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SupervisingUnit {
+    /// unit 名，例如 `miyu.service`。
+    pub name: String,
+    /// 是不是 `--user` 管理器（用户级 unit）。系统级要加 `sudo`，我们不下这个手。
+    pub user_manager: bool,
+}
+
+impl SupervisingUnit {
+    /// 用哪个 systemctl 才能碰到它。
+    pub fn systemctl_args(&self) -> Vec<String> {
+        let mut args = Vec::new();
+        if self.user_manager {
+            args.push("--user".to_string());
+        }
+        args
+    }
+}
+
+/// 从 `/proc/<pid>/cgroup` 的一行内容里认出监管 unit。
+///
+/// cgroup v2 的格式是 `0::/user.slice/user-1000.slice/user@1000.service/app.slice/miyu.service`。
+/// 取最后一段 `.service`：`user@1000.service` 是用户管理器本身，不是监管者，
+/// 所以从末尾往前找，跳过它。
+pub fn parse_supervising_unit(cgroup: &str, uid: u32) -> Option<SupervisingUnit> {
+    let path = cgroup.trim().split(':').nth(2)?;
+    // 是不是用户级 unit：路径里出现用户管理器就算。这个判定要独立做——
+    // 从 daemon 往外（rev）走时，先碰到的是 daemon 自己的 unit，再往外才
+    // 是 `user@<uid>.service`；一旦在 unit 处停下，管理器根本走不到。
+    let manager = format!("user@{uid}.service");
+    let user_manager = path.contains(&manager) || path.contains("user@.service");
+    // 监管 unit 是 daemon 往外走遇到的第一个 .service。用户管理器自己
+    // （`user@<uid>.service`）不算：它是「谁来跑这一整套用户 unit」，不是
+    // 「谁监管 daemon」——拿它当监管者，重启就等于重启整个用户会话。
+    for component in path.split('/').rev() {
+        if !component.ends_with(".service") {
+            continue;
+        }
+        if component == manager || component == "user@.service" {
+            continue;
+        }
+        return Some(SupervisingUnit {
+            name: component.to_string(),
+            user_manager,
+        });
+    }
+    None
+}
+
+/// 本进程所处 cgroup 的原始内容（cgroup v2 的第一行）。读不到就是 `None`。
+fn read_cgroup(pid: u32) -> Option<String> {
+    if pid == 0 {
+        return None;
+    }
+    std::fs::read_to_string(format!("/proc/{pid}/cgroup"))
+        .ok()?
+        .lines()
+        .next()
+        .map(str::to_string)
+}
+
+/// daemon 受 systemd 监管时返回它的 unit。
+#[cfg(target_os = "linux")]
+pub fn supervising_unit(pid: u32) -> Option<SupervisingUnit> {
+    parse_supervising_unit(&read_cgroup(pid)?, unsafe { libc::getuid() })
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn supervising_unit(_pid: u32) -> Option<SupervisingUnit> {
+    None
+}
+
+/// 本进程是不是就跑在要被重启的那个 unit 里。
+///
+/// 是的话绝不能动手：daemon 自己跑 `run_command` 时会拉起 `miyu` CLI，那个
+/// CLI 就在 `miyu.service` 的 cgroup 里；它一旦去 `systemctl restart`，等于
+/// 把正在执行自己的父进程连根拔掉。
+fn self_is_inside(unit: &SupervisingUnit) -> bool {
+    let Some(cgroup) = read_cgroup(std::process::id()) else {
+        return false;
+    };
+    parse_supervising_unit(&cgroup, unsafe { libc::getuid() }).is_some_and(|mine| mine == *unit)
+}
+
+/// 委托 systemd 重启，并等新 daemon 就绪。
+async fn restart_under_systemd(
+    paths: &MiyuPaths,
+    unit: &SupervisingUnit,
+    info: &DaemonInfo,
+) -> Result<()> {
+    if self_is_inside(unit) {
+        bail!(
+            "{}",
+            miyu_base::i18n::text(
+                "The running Miyu daemon is supervised by systemd, and this process lives inside that same unit. Restart it from outside instead of killing it here.",
+                "这个 Miyu daemon 由 systemd 监管，而本进程就跑在同一个 unit 里；请在 unit 外面重启，不要在这里动手。"
+            )
+        );
+    }
+    let mut command = tokio::process::Command::new("systemctl");
+    command.args(unit.systemctl_args());
+    command.arg("restart").arg(&unit.name);
+    command.stdin(std::process::Stdio::null());
+    let output = tokio::time::timeout(Duration::from_secs(60), command.output())
+        .await
+        .map_err(|_| anyhow::anyhow!("systemctl restart {} timed out", unit.name))?
+        .with_context(|| format!("running systemctl restart {}", unit.name))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!(
+            "systemctl restart {} failed ({}): {}",
+            unit.name,
+            output.status,
+            stderr.trim()
+        );
+    }
+    // 等新 daemon 顶着新 build_id 就绪。等不到就说清楚，绝不再私拉一个——
+    // 那正是这个 bug 的形状。
+    let deadline = tokio::time::Instant::now() + daemon_ready_timeout();
+    loop {
+        if let Some(refreshed) = daemon_info(paths).await {
+            if refreshed.build_id == build_id() {
+                return Ok(());
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            bail!(
+                "{} (unit {}, daemon build {}, this process build {})",
+                miyu_base::i18n::text(
+                    "The Miyu daemon was restarted via systemd, but its build id still does not match this process. Reopen this client (or update it) so it runs the same build as the installed binary; the daemon will not be replaced privately.",
+                    "Miyu daemon 已经通过 systemd 重启，但它的 build id 与本进程仍不一致。请重开或更新本客户端，让它与磁盘上那份二进制同版；daemon 不会被私下替换。"
+                ),
+                unit.name,
+                info.build_id,
+                build_id()
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 pub async fn shutdown_daemon(paths: &MiyuPaths, info: &DaemonInfo) -> Result<()> {

@@ -38,6 +38,61 @@ pub fn build_id() -> &'static str {
 mod tests {
     use super::*;
 
+    mod supervising_unit {
+        use super::super::*;
+
+        /// 真实机器上的形状：用户级 unit。
+        #[test]
+        fn a_user_unit_is_recognized_and_the_manager_is_skipped() {
+            let cgroup = "0::/user.slice/user-1000.slice/user@1000.service/app.slice/miyu.service";
+            let unit = parse_supervising_unit(cgroup, 1000).expect("该认出 miyu.service");
+            assert_eq!(unit.name, "miyu.service");
+            assert!(unit.user_manager);
+            assert_eq!(unit.systemctl_args(), vec!["--user".to_string()]);
+        }
+
+        /// 用户管理器本身不是监管者：只到 `user@1000.service` 就停的话，重启
+        /// 就等于「重启整个用户会话」，那会顺手杀掉终端、浏览器、一切。
+        #[test]
+        fn the_user_manager_alone_is_not_a_supervisor() {
+            let cgroup = "0::/user.slice/user-1000.slice/user@1000.service/init.scope";
+            assert_eq!(parse_supervising_unit(cgroup, 1000), None);
+        }
+
+        /// 系统级 unit：systemctl 不带 `--user`。
+        #[test]
+        fn a_system_unit_needs_no_user_flag() {
+            let cgroup = "0::/system.slice/miyu.service";
+            let unit = parse_supervising_unit(cgroup, 1000).expect("该认出 miyu.service");
+            assert_eq!(unit.name, "miyu.service");
+            assert!(!unit.user_manager);
+            assert!(unit.systemctl_args().is_empty());
+        }
+
+        /// 压根不在任何 unit 里——终端里手起的裸进程，正是应该私杀私拉的那种。
+        #[test]
+        fn a_bare_process_has_no_supervising_unit() {
+            assert_eq!(parse_supervising_unit("0::/", 1000), None);
+            assert_eq!(parse_supervising_unit("0::/init.scope", 1000), None);
+            assert_eq!(parse_supervising_unit("", 1000), None);
+        }
+
+        /// 别的用户的 `user@1001.service` 不该被当成「自己的用户管理器」跳过。
+        #[test]
+        fn another_users_manager_does_not_shadow_the_real_unit() {
+            let cgroup = "0::/user.slice/user-1001.slice/user@1001.service/app.slice/miyu.service";
+            let unit = parse_supervising_unit(cgroup, 1000).expect("该认出 miyu.service");
+            assert_eq!(unit.name, "miyu.service");
+        }
+
+        /// cgroup v1 那种多行/多级写法不该崩。
+        #[test]
+        fn malformed_lines_are_rejected_without_panicking() {
+            assert_eq!(parse_supervising_unit("garbage", 1000), None);
+            assert_eq!(parse_supervising_unit("1:name=systemd:/", 1000), None);
+        }
+    }
+
     fn paths_with_logs(root: &std::path::Path) -> miyu_base::paths::MiyuPaths {
         let paths = miyu_base::paths::MiyuPaths {
             root_dir: root.to_path_buf(),
