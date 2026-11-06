@@ -13,6 +13,7 @@ mod input;
 mod instruction_source;
 mod overflow_recovery;
 mod prompt;
+mod purge;
 mod queue_journal;
 mod queued_compact;
 mod reasoning;

@@ -291,6 +291,14 @@ async fn dispatch_ipc_connection(
                                 "listen_port": qq_port,
                                 "connected_accounts": connected_accounts,
                             }
+                        },
+                        "purge": {
+                            // 运行时旗标:CLI 的 purge selfcheck 靠它核对
+                            // daemon 里真实生效的静态闸(§purge)。
+                            "net_guard_bypassed":
+                                state.manager.lock().unwrap().config.purge.net_guard_bypassed(),
+                            "sandbox_passthrough":
+                                miyu_base::sandbox::purge_runtime_passthrough(),
                         }
                     }),
                 },
@@ -472,6 +480,12 @@ async fn dispatch_ipc_connection(
                 .await?;
                 return Ok(());
             }
+            // purge 旗标(§purge)随重载刷新:静态闸(net/沙盒直通)跟配置走,
+            // 注入段由新回合的 Agent 构造期自行冻结,不在这里管。
+            miyu_engine::tools::net_guard::set_bypassed(
+                next_config.purge.net_guard_bypassed(),
+            );
+            miyu_base::sandbox::set_purge_passthrough(next_config.purge.sandbox_bypassed());
             let (reply, receiver) = oneshot::channel();
             if state
                 .actor_tx

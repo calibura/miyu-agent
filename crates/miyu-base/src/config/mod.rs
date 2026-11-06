@@ -15,6 +15,7 @@ mod platform_ops;
 mod platform_plugins;
 mod pool_ref;
 mod provider;
+pub mod purge;
 pub use provider::append_resolved_api_keys;
 mod provider_ops;
 pub(crate) mod subsystems;
@@ -34,6 +35,7 @@ pub use platform::*;
 pub use platform_plugins::*;
 pub use pool_ref::*;
 pub use provider::*;
+pub use purge::{PurgeConfig, PurgeFlags};
 pub use subsystems::EnabledSubsystems;
 pub use tool_plugins::*;
 pub use voice::*;
@@ -116,6 +118,8 @@ pub struct AppConfig {
     pub notifications: NotificationsConfig,
     #[serde(default)]
     pub prompt: PromptConfig,
+    #[serde(default)]
+    pub purge: PurgeConfig,
     #[serde(default)]
     pub plugins: PluginsConfig,
     #[serde(default, skip_serializing)]
@@ -498,6 +502,7 @@ impl Default for AppConfig {
             display: DisplayConfig::default(),
             notifications: NotificationsConfig::default(),
             prompt: PromptConfig::default(),
+            purge: PurgeConfig::default(),
             plugins: PluginsConfig::default(),
             memory: MemoryConfig::default(),
             system_prompt_file: Some("system-prompt.md".to_string()),

@@ -112,6 +112,10 @@ async fn guards_follow_external_symlinks_and_nonexistent_leaves() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn linux_all_entrypoints_enforce_policy_and_inherited_grants() {
+    // purge 直通测试会改进程级旗标(§purge),两边拿同一把测试互斥圈住各自窗口。
+    let _guard = super::PURGE_FLAG_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     let abi = probe().expect("BLOCKED: Linux kernel without Landlock");
     eprintln!("distribution_sandbox Linux kernel Landlock ABI: {abi}");
     let temp = tempfile::tempdir().unwrap();
@@ -158,6 +162,10 @@ async fn linux_all_entrypoints_enforce_policy_and_inherited_grants() {
 #[cfg(target_os = "linux")]
 #[tokio::test]
 async fn linux_relay_preserves_home_and_grants_only_explicit_config() {
+    // purge 直通测试会改进程级旗标(§purge),两边拿同一把测试互斥圈住各自窗口。
+    let _guard = super::PURGE_FLAG_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
     let abi = probe().expect("BLOCKED: Linux kernel without Landlock");
     eprintln!("distribution_sandbox Linux kernel Landlock ABI: {abi}");
     let temp = tempfile::tempdir().unwrap();

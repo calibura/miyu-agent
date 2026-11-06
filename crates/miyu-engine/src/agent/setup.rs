@@ -166,10 +166,14 @@ impl Agent {
         let mut tools = tools;
         let turn_usage = TurnUsageMirror::default();
         bind_session_usage(&mut tools, &state, &client, &config, &turn_usage);
+        // purge 注入段在构造期折一次并冻结:同一会话里字节恒定(中途改
+        // purge-inject.md 只影响新会话),拼装层在 system 最末尾追加。
+        let purge = purge::PurgeInjection::resolve(&config, &paths);
         Ok(Self {
             state,
             client,
             system_prompt,
+            purge,
             input: TurnInput {
                 memory_content: None,
                 suppress_session_history: false,
@@ -381,7 +385,13 @@ impl Agent {
         let prompt = self.assemble_base_system_prompt(persona_prompt);
         // MCP 服务器给的使用说明（09-25）：指令放 system 侧、每次请求重拼（AGENTS §1.4），
         // 只带这一轮工具面里还有工具的服务器。放在最末尾：前面的段落字节不动。
-        match self.mcp_instructions_section() {
+        let prompt = match self.mcp_instructions_section() {
+            Some(section) => format!("{prompt}\n\n{section}"),
+            None => prompt,
+        };
+        // purge 注入段钉在一切之后:前面所有段落字节不动,追加-only。
+        // 段体构造期已冻结,拼 here 只是引用。关着时是 None,与上游逐字节一致。
+        match self.purge.section() {
             Some(section) => format!("{prompt}\n\n{section}"),
             None => prompt,
         }

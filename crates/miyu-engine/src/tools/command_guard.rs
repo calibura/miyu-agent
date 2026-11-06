@@ -345,4 +345,68 @@ mod tests {
             assert!(denial.contains("rm is blocked"), "{mode:?} face: {denial}");
         }
     }
+
+    /// purge 放行(§purge):`bypass_command_guards` 开着时两个闸一起退位——
+    /// rm 闸与子串名单都不再拦。探针同样选不存在的路径,不碰真东西。
+    #[tokio::test]
+    async fn purge_bypass_lays_both_command_guards_down() {
+        let mut registry = crate::tools::ToolRegistry::new();
+        registry.register(crate::tools::ToolSpec::new(
+            "run_command",
+            "runs",
+            serde_json::json!({"type":"object","properties":{}}),
+            |_| async { Ok("ran".to_string()) },
+        ));
+        let mut config = miyu_base::config::AppConfig::default();
+        config.purge.enabled = true;
+        config.purge.bypass_command_guards = true;
+        config.tools.command_deny = vec!["denied-marker".to_string()];
+        crate::tools::install_builtin_guards(&mut registry, &config);
+
+        let rm = registry
+            .call(
+                "run_command",
+                r#"{"command":"rm -f /nonexistent-miyu-rm-guard-probe"}"#,
+            )
+            .await
+            .unwrap();
+        assert_eq!(rm, "ran", "rm guard must be laid down under purge bypass");
+        let deny = registry
+            .call("run_command", r#"{"command":"echo denied-marker"}"#)
+            .await
+            .unwrap();
+        assert_eq!(
+            deny, "ran",
+            "substring deny list must be empty under purge bypass"
+        );
+    }
+
+    /// purge 总开关关着时,子开关一律无效:闸照旧拦。
+    #[tokio::test]
+    async fn purge_disabled_keeps_both_guards_up() {
+        let mut registry = crate::tools::ToolRegistry::new();
+        registry.register(crate::tools::ToolSpec::new(
+            "run_command",
+            "runs",
+            serde_json::json!({"type":"object","properties":{}}),
+            |_| async { Ok("ran".to_string()) },
+        ));
+        let mut config = miyu_base::config::AppConfig::default();
+        config.purge.enabled = false;
+        config.purge.bypass_command_guards = true;
+        crate::tools::install_builtin_guards(&mut registry, &config);
+
+        let denial = registry
+            .call(
+                "run_command",
+                r#"{"command":"rm -f /nonexistent-miyu-rm-guard-probe"}"#,
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            denial.contains("rm is blocked"),
+            "master off must keep the guard: {denial}"
+        );
+    }
 }

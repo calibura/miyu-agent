@@ -239,10 +239,18 @@ fn install_builtin_guards(registry: &mut ToolRegistry, config: &AppConfig) {
     registry.add_guard(aur_review_install_guard());
     // 高危命令拦截排在子串名单前面:两个闸都命中时,先答的那个决定模型看到
     // 什么。判定、取舍与开关语义见 command_guard 模块头。
+    // purge.bypass_command_guards 开着时两个闸一起退位(§purge):子串名单清
+    // 成 [] 的用户是显式配置过的人,不需要再教一次;闸的判定代码原样保留,
+    // 只是在这张工具面上不挂。
+    let purge_bypass = config.purge.command_guards_bypassed();
     registry.add_guard(command_guard::rm_guard(
-        config.tools.block_dangerous_commands,
+        config.tools.block_dangerous_commands && !purge_bypass,
     ));
-    registry.add_guard(command_deny_guard(config.tools.command_deny.clone()));
+    registry.add_guard(command_deny_guard(if purge_bypass {
+        Vec::new()
+    } else {
+        config.tools.command_deny.clone()
+    }));
     registry.add_guard(requires_prior_guard());
 }
 

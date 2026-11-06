@@ -10,6 +10,7 @@ mod platform_port;
 pub use platform_port::PlatformTurn;
 mod journal;
 pub(crate) mod prompt;
+mod purge;
 pub use prompt::prompt_strip_tagged;
 mod pruning;
 mod reasoning;
@@ -257,6 +258,9 @@ pub struct Agent {
     state: StateStore,
     client: OpenAiCompatibleClient,
     system_prompt: String,
+    /// purge 注入段(构造期冻结,见 `agent/purge.rs`)。关着时 section 为 None,
+    /// 拼装与上游逐字节一致。
+    purge: purge::PurgeInjection,
     /// 场所/插件在回合前塞进来的本回合输入(平台上下文、附件、系统侧追加段等),回合取走或覆盖。
     input: TurnInput,
     /// 构造/重载时定下、回合中不变的快照:模式、受众、配置、路径、子系统启用集与几个上限。

@@ -280,6 +280,7 @@ pub(in crate::cli) fn localize_subcommands(mut command: clap::Command) -> clap::
         ),
         ("memory", "Manage assistant memory", "管理记忆"),
         ("skills", "Manage assistant skills", "管理助手 skills"),
+        ("purge", "Inspect the purge subsystem (status / edit / selfcheck / probe)", "查看 purge 子系统（status / edit / selfcheck / probe）"),
         (
             "reset",
             "Clear the terminal-integration session context",
@@ -351,6 +352,7 @@ pub(in crate::cli) fn localize_subcommands(mut command: clap::Command) -> clap::
         "kb",
         "memory",
         "skills",
+        "purge",
         "update-default-kb",
         "wipe",
         "paths",
@@ -388,6 +390,7 @@ pub(in crate::cli) fn localize_subcommands(mut command: clap::Command) -> clap::
         .mut_subcommand("memory", localize_memory_command)
         .mut_subcommand("skills", localize_skills_command)
         .mut_subcommand("config", localize_config_command)
+        .mut_subcommand("purge", localize_purge_command)
         .mut_subcommand("web", localize_web_command)
         .mut_subcommand("daemon", localize_daemon_command)
         .mut_subcommand("export", localize_export_command)
@@ -829,6 +832,35 @@ pub(in crate::cli) fn localize_skills_command(mut command: clap::Command) -> cla
         command = command.mut_subcommand(name, |subcommand| {
             subcommand.mut_arg("name", |arg| arg.help(t("Skill name", "skill 名称")))
         });
+    }
+    command
+}
+
+pub(in crate::cli) fn localize_purge_command(mut command: clap::Command) -> clap::Command {
+    let descriptions = [
+        (
+            "status",
+            "Show purge switches and inject source",
+            "显示 purge 各层开关与注入正文来源",
+        ),
+        (
+            "edit",
+            "Create or locate the inject file (--print to show it)",
+            "创建/定位注入文件(--print 输出正文)",
+        ),
+        (
+            "selfcheck",
+            "Verify switches, inject text and runtime flags",
+            "核对开关、注入正文与运行时旗标",
+        ),
+        (
+            "probe",
+            "Print a nonce to confirm the injection reaches the model",
+            "输出探针 nonce,确认注入到达模型",
+        ),
+    ];
+    for (name, en, zh) in descriptions {
+        command = command.mut_subcommand(name, |subcommand| subcommand.about(t(en, zh)));
     }
     command
 }

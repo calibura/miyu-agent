@@ -420,6 +420,7 @@ pub async fn run(cli: Cli, paths: MiyuPaths) -> Result<()> {
         Some(Command::UpdateDefaultKb) => run_update_default_kb(&paths).await,
         Some(Command::Memory(args)) => run_memory(&paths, args),
         Some(Command::Skills(args)) => run_skills(&paths, args),
+        Some(Command::Purge(args)) => run_purge(&paths, args).await,
         Some(Command::ResetMemoryCli) => run_reset_memory_command(&paths).await,
         Some(Command::ResetAllMemoryCli) => run_reset_all_memory_command(&paths).await,
         Some(Command::Reset(args)) => {

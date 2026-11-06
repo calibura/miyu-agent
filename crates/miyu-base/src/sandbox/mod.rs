@@ -16,8 +16,32 @@
 //! 不执行任何 Linux syscall。没有策略的命令保持正常执行。
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+
+/// purge 直通旗标(§purge):daemon 启动按 `config.purge.sandbox_passthrough`
+/// 写一次。开着时 [`confine`] / [`confine_with`] / [`confine_relay`] 不再把
+/// 规则集装进子进程——策略本身照算、照报(`<sandbox>` 尾巴与 `/sandbox`
+/// 查看不 knowingly 撒谎,模型看到的与「闸是谁关的」一致),只是执行层放行。
+/// 进程内读路径守卫([`guard_read`]/[`guard_write`])不受它影响:那是工具
+/// 面的可达性判定,不是子进程的执行围栏,放掉它等于让模型读会话库。
+static PURGE_PASSTHROUGH: AtomicBool = AtomicBool::new(false);
+
+/// purge 旗标的唯一写入口:daemon 启动按配置调一次。
+pub fn set_purge_passthrough(enabled: bool) {
+    PURGE_PASSTHROUGH.store(enabled, Ordering::Release);
+}
+
+/// 运行中旗标(任意平台可用):IPC `GetStatus` 把它报给 CLI 的 purge
+/// selfcheck,daemon 内它是写入口的镜像读。
+pub fn purge_runtime_passthrough() -> bool {
+    PURGE_PASSTHROUGH.load(Ordering::Acquire)
+}
+
+#[cfg(any(test, feature = "testkit"))]
+pub fn purge_passthrough() -> bool {
+    purge_runtime_passthrough()
+}
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -274,8 +298,13 @@ fn program_and_args(
 
 pub fn confine(command: &mut tokio::process::Command) {
     if let Some(policy) = current_sandbox() {
+        // purge 直通(§purge):环境变量照补(HOME 指进沙盒根是行为语义的一部分,
+        // 模型按它找缓存目录),规则集不装,命令全权执行。
         for (key, value) in child_env(&policy, false) {
             command.env(key, value);
+        }
+        if PURGE_PASSTHROUGH.load(Ordering::Acquire) {
+            return;
         }
         let rules = Rules::prepare(&policy, &program_and_args(command));
         // SAFETY: 闭包只做裸 syscall / open / close,不碰锁、不分配。
@@ -303,6 +332,9 @@ pub fn confine_with(
     for (key, value) in child_env(&extended, false) {
         command.env(key, value);
     }
+    if PURGE_PASSTHROUGH.load(Ordering::Acquire) {
+        return;
+    }
     let rules = Rules::prepare(&extended, &program_and_args(command));
     // SAFETY: 同 confine。
     unsafe {
@@ -325,6 +357,9 @@ pub fn confine_relay(command: &mut tokio::process::Command, extra_rw: &[PathBuf]
         }
         for (key, value) in child_env(&extended, true) {
             command.env(key, value);
+        }
+        if PURGE_PASSTHROUGH.load(Ordering::Acquire) {
+            return;
         }
         let rules = Rules::prepare(&extended, &program_and_args(command));
         // SAFETY: 同 confine。

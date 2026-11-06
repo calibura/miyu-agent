@@ -272,4 +272,69 @@ async fn no_policy_means_no_confinement() {
     assert!(target.is_file());
 }
 
+/// purge 直通(§purge):旗标开着时,策略在身的命令也全权执行——沙盒外可写,
+/// 而环境补丁(HOME 指进沙盒根)照旧,那是行为语义不是围栏。
+///
+/// 沙盒既有行为级证据(`member_policy_confines_shell_writes`)守「关得住」;
+/// 这一条守「直通真的放行」。旗标是进程级静态:测试里改完要还原,不然漏出去
+/// 会把同进程后续测试的沙盒全打开。
+/// purge 直通测试与 distribution_sandbox 行为组共用的旗标互斥:purge 直通
+/// 改的是**进程级**静态旗标,放行窗口里 distribution 组的「沙盒外必须写不进」
+/// 断言会被撞穿(AGENTS §8.5 并行抖动类)。整段「改旗标 → 验证 → 还原」圈进
+/// 这把锁,与所有其它沙盒行为测试互斥。锁私有于测试,生产路径零开销。
+#[cfg(test)]
+pub(crate) static PURGE_FLAG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[tokio::test]
+async fn purge_passthrough_lets_sandboxed_commands_write_anywhere() {
+    let _guard = PURGE_FLAG_LOCK
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner());
+    let abi = probe().expect("BLOCKED: no sandbox backend on this machine");
+    eprintln!("sandbox backend ready: {abi}");
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().join("root");
+    let outside = temp.path().join("outside");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    let policy = Arc::new(SandboxPolicy {
+        root: root.clone(),
+        read_only: vec![PathBuf::from("/")],
+        read_write: vec![root.clone(), PathBuf::from("/dev/null")],
+        home: Some(root.clone()),
+        ..Default::default()
+    });
+    let script = format!(
+        "echo ok > {}/inside.txt && echo ok > {}/outside.txt && cat /etc/hosts >/dev/null",
+        root.display(),
+        outside.display()
+    );
+    let run = || async {
+        let mut command = tokio::process::Command::new("sh");
+        command.arg("-c").arg(script.clone());
+        confine(&mut command);
+        command.status().await.unwrap()
+    };
+    // 旗标关着(出厂态):沙盒照套,沙盒外的写必须失败。
+    set_purge_passthrough(false);
+    let confined = with_sandbox(Some(policy.clone()), run()).await;
+    assert!(
+        !confined.success(),
+        "purge off: writing outside the sandbox must fail, got {confined}"
+    );
+    assert!(!outside.join("outside.txt").exists());
+    // 旗标开着:同一个策略、同一段脚本,沙盒外的写成功——环境补丁照给(HOME
+    // 仍指进沙盒根,但围栏没了)。
+    set_purge_passthrough(true);
+    let passed = with_sandbox(Some(policy.clone()), run()).await;
+    set_purge_passthrough(false); // 先还原再断言,漏旗标别污染别的测试。
+    assert!(
+        passed.success(),
+        "purge on: the same script must run unrestricted, got {passed}"
+    );
+    assert!(root.join("inside.txt").is_file());
+    assert!(outside.join("outside.txt").is_file());
+}
+
 mod distribution_sandbox;

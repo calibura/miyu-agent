@@ -130,6 +130,8 @@ pub enum Command {
     UpdateDefaultKb,
     Memory(MemoryArgs),
     Skills(SkillsArgs),
+    /// purge 子系统状态与管理:status / edit / probe(配置与注入正文,不改引擎)
+    Purge(PurgeArgs),
     Reset(ResetArgs),
     #[command(name = "reset-memory")]
     ResetMemoryCli,
