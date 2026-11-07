@@ -65,6 +65,9 @@ pub enum PurgeCommand {
     Edit {
         #[arg(long)]
         print: bool,
+        /// 恢复出厂模板;旧正文先备份成 purge-inject.md.bak-<时间戳>
+        #[arg(long)]
+        reset: bool,
     },
     /// 生效性自检:配置 × 注入正文 × 运行时旗标逐项核对
     Selfcheck,
@@ -491,11 +494,38 @@ pub(in crate::cli) async fn run_purge(paths: &MiyuPaths, args: PurgeArgs) -> Res
                 None => t("off", "关"),
             };
             println!("{}: {source}", t("inject source", "注入正文"));
+            println!(
+                "{}: {}",
+                t("audit log", "审计日志"),
+                miyu_base::config::purge::audit_file_path(&paths.state_dir).display()
+            );
         }
-        PurgeCommand::Edit { print } => {
+        PurgeCommand::Edit { print, reset } => {
             let created = miyu_base::config::purge::ensure_inject_file(&paths.config_dir)?;
             let path = miyu_base::config::purge::inject_file_path(&paths.config_dir);
-            if created {
+            if reset {
+                match miyu_base::config::purge::reset_inject_file(&paths.config_dir)? {
+                    Some(backup) => {
+                        println!(
+                            "{} {}",
+                            t(
+                                "reset to factory template; old body kept at",
+                                "已恢复出厂模板；旧正文备份在"
+                            ),
+                            backup.display()
+                        );
+                    }
+                    None => {
+                        println!(
+                            "{}",
+                            t(
+                                "nothing to reset — the inject file does not exist yet",
+                                "没有可恢复的——注入文件还不存在"
+                            )
+                        );
+                    }
+                }
+            } else if created {
                 println!(
                     "{}: {}",
                     t("created inject file", "已创建注入文件"),
@@ -654,7 +684,10 @@ async fn run_purge_rules(
     if clear {
         config.purge.rule_selections.clear();
         config.save(paths)?;
-        println!("{}", t("cleared every rule selection", "已清空全部规则勾选"));
+        println!(
+            "{}",
+            t("cleared every rule selection", "已清空全部规则勾选")
+        );
     }
     if !select.is_empty() {
         // 勾选必须命中当前扫描结果：跨目录的路径存进去也不会生效，
@@ -689,11 +722,7 @@ async fn run_purge_rules(
         config.save(paths)?;
     }
 
-    println!(
-        "{} {}",
-        t("scanning:", "扫描目录:"),
-        cwd.display()
-    );
+    println!("{} {}", t("scanning:", "扫描目录:"), cwd.display());
     if scanned.is_empty() {
         println!(
             "  {}",
@@ -709,8 +738,7 @@ async fn run_purge_rules(
             purge_rules::CwdScope::Root => t("root", "项目根"),
             purge_rules::CwdScope::Ancestor => t("ancestor", "上级目录"),
         };
-        let canonical =
-            std::fs::canonicalize(&item.path).unwrap_or_else(|_| item.path.clone());
+        let canonical = std::fs::canonicalize(&item.path).unwrap_or_else(|_| item.path.clone());
         let chosen = config
             .purge
             .rule_selections

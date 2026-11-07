@@ -216,6 +216,82 @@ pub fn ensure_inject_file(config_dir: &std::path::Path) -> std::io::Result<bool>
     Ok(true)
 }
 
+/// 审计事件。每次 purge 配置变更/注入正文改写记一条,JSONL 追加写。
+/// 对照 dsh-purge 的 `audit.jsonl`(那边每次 apply 记 applied/already/failed)。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PurgeAuditEvent {
+    /// RFC3339 时间的 Unix 毫秒。用毫秒是因为本机时间可能回拨,毫秒去重足够。
+    pub at_ms: u64,
+    /// `enable` / `disable` / `inject_written` / `inject_reset` / `rules_changed`
+    pub event: String,
+    /// 变更后的关键旗标快照(便于事后对账,不用翻配置历史)。
+    pub enabled: bool,
+    pub bypass_command_guards: bool,
+    pub bypass_net_guard: bool,
+    pub sandbox_passthrough: bool,
+    pub boost: bool,
+    /// 变更摘要(人读的,如 "2 rules selected" / "inject reset from template")。
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub detail: String,
+}
+
+/// 审计文件路径:`<state_dir>/purge-audit.jsonl`。
+pub fn audit_file_path(state_dir: &std::path::Path) -> std::path::PathBuf {
+    state_dir.join("purge-audit.jsonl")
+}
+
+/// 追加一条审计。写失败不 panic:审计是尽力而为的旁路,不能反过来挡住
+/// 用户改配置。调用方拿 `Result` 自己决定要不要提示。
+pub fn append_audit(
+    state_dir: &std::path::Path,
+    event: &str,
+    config: &PurgeConfig,
+    detail: &str,
+) -> std::io::Result<()> {
+    let record = PurgeAuditEvent {
+        at_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0),
+        event: event.to_string(),
+        enabled: config.enabled,
+        bypass_command_guards: config.bypass_command_guards,
+        bypass_net_guard: config.bypass_net_guard,
+        sandbox_passthrough: config.sandbox_passthrough,
+        boost: config.boost,
+        detail: detail.to_string(),
+    };
+    let line = serde_json::to_string(&record)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    use std::io::Write;
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(audit_file_path(state_dir))?;
+    file.write_all(line.as_bytes())?;
+    file.write_all(b"\n")
+}
+
+/// `miyu purge edit --reset`:把注入正文恢复成出厂模板。
+///
+/// 旧正文先备份成 `<config_dir>/purge-inject.md.bak-<unix秒>` 再覆盖——
+/// 用户正文永不覆盖的规矩在这里破例,所以必须留退路。文件不存在时是
+/// no-op(没有可恢复的东西),返回 `Ok(None)`。
+pub fn reset_inject_file(config_dir: &std::path::Path) -> std::io::Result<Option<PathBuf>> {
+    let path = inject_file_path(config_dir);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let backup = config_dir.join(format!("{PURGE_INJECT_FILE}.bak-{stamp}"));
+    std::fs::copy(&path, &backup)?;
+    std::fs::write(&path, DEFAULT_INJECT_TEMPLATE)?;
+    Ok(Some(backup))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,5 +381,46 @@ mod tests {
         // 空白文件当没写。
         std::fs::write(dir.join(PURGE_INJECT_FILE), "  \n").unwrap();
         assert!(read_inject_text(dir).is_none());
+    }
+
+    #[test]
+    fn audit_appends_one_jsonl_line_per_event() {
+        let temp = tempfile::tempdir().unwrap();
+        let state = temp.path();
+        append_audit(state, "enable", &config(true), "enabled by test").unwrap();
+        append_audit(state, "disable", &config(false), "").unwrap();
+
+        let raw = std::fs::read_to_string(audit_file_path(state)).unwrap();
+        let lines = raw.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 2, "两条事件两行");
+
+        let first: PurgeAuditEvent = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(first.event, "enable");
+        assert!(first.enabled);
+        assert_eq!(first.detail, "enabled by test");
+
+        let second: PurgeAuditEvent = serde_json::from_str(lines[1]).unwrap();
+        assert_eq!(second.event, "disable");
+        assert!(!second.enabled);
+    }
+
+    #[test]
+    fn reset_backs_up_the_old_body_before_overwriting() {
+        let temp = tempfile::tempdir().unwrap();
+        let dir = temp.path();
+        // 没有文件时是 no-op。
+        assert!(reset_inject_file(dir).unwrap().is_none());
+
+        std::fs::write(dir.join(PURGE_INJECT_FILE), "my precious words").unwrap();
+        let backup = reset_inject_file(dir).unwrap().expect("备份该生成");
+        // 备份留着原文,正文回到出厂模板。
+        assert_eq!(
+            std::fs::read_to_string(&backup).unwrap(),
+            "my precious words"
+        );
+        assert_eq!(
+            read_inject_text(dir).as_deref(),
+            Some(DEFAULT_INJECT_TEMPLATE.trim())
+        );
     }
 }

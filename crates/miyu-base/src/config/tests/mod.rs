@@ -8,4 +8,5 @@ mod paths;
 mod platform;
 mod plugins;
 mod provider;
+mod purge_audit;
 mod shared;

@@ -100,6 +100,9 @@ impl AppConfig {
     }
 
     pub fn save(&self, paths: &MiyuPaths) -> Result<()> {
+        // 先读盘上旧 purge 段做对比:审计只记真正变化的保存(第一次保存、
+        // 每次开关变化),不把「改了个 voice 参数」也记成 purge 事件。
+        let purge_before = AppConfig::load_or_default(paths).ok().map(|old| old.purge);
         let mut config = self.prepared_for_save(paths)?;
         paths.create_dirs()?;
         if let Some(prompt) = config.system_prompt.take() {
@@ -133,7 +136,70 @@ impl AppConfig {
         let temp = tempfile::NamedTempFile::new_in(config_dir)?;
         std::fs::write(temp.path(), format!("{raw}\n"))?;
         temp.persist(&paths.config_file)?;
+        self.audit_purge_change(paths, purge_before.as_ref());
         Ok(())
+    }
+
+    /// purge 段有实质变化时追加一条审计。尽力而为:审计失败不推翻保存
+    /// (保存已落盘,失败只留 warning)。
+    fn audit_purge_change(&self, paths: &MiyuPaths, before: Option<&crate::config::PurgeConfig>) {
+        use crate::config::purge::append_audit;
+        let after = &self.purge;
+        let detail = match before {
+            // 没有旧配置(首次保存)且 purge 关着:默认值落盘,不值得记。
+            None if !after.enabled => return,
+            None => "first save with purge enabled".to_string(),
+            Some(before) => {
+                let changed = [
+                    before.enabled != after.enabled,
+                    before.bypass_command_guards != after.bypass_command_guards,
+                    before.bypass_net_guard != after.bypass_net_guard,
+                    before.sandbox_passthrough != after.sandbox_passthrough,
+                    before.boost != after.boost,
+                    before.net_allowlist != after.net_allowlist,
+                    before.rule_selections != after.rule_selections,
+                ]
+                .into_iter()
+                .any(std::convert::identity);
+                if !changed {
+                    return;
+                }
+                if before.enabled != after.enabled {
+                    if after.enabled {
+                        "purge enabled".to_string()
+                    } else {
+                        "purge disabled".to_string()
+                    }
+                } else {
+                    let mut parts = Vec::new();
+                    if before.net_allowlist != after.net_allowlist {
+                        parts.push(format!("allowlist={} entries", after.net_allowlist.len()));
+                    }
+                    if before.rule_selections != after.rule_selections {
+                        parts.push(format!("rules={} selections", after.rule_selections.len()));
+                    }
+                    if before.bypass_command_guards != after.bypass_command_guards {
+                        parts.push(format!("command_guards={}", after.bypass_command_guards));
+                    }
+                    if before.bypass_net_guard != after.bypass_net_guard {
+                        parts.push(format!("net_guard={}", after.bypass_net_guard));
+                    }
+                    if before.sandbox_passthrough != after.sandbox_passthrough {
+                        parts.push(format!("sandbox={}", after.sandbox_passthrough));
+                    }
+                    if before.boost != after.boost {
+                        parts.push(format!("boost={}", after.boost));
+                    }
+                    parts.join(", ")
+                }
+            }
+        };
+        if let Err(error) = append_audit(&paths.state_dir, "config_saved", after, &detail) {
+            tracing::warn!(
+                error = %error,
+                "purge audit append failed (config was saved regardless)"
+            );
+        }
     }
 
     pub(crate) fn migrate(&mut self) -> Result<()> {
