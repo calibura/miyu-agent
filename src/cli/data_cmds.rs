@@ -70,6 +70,15 @@ pub enum PurgeCommand {
     Selfcheck,
     /// 探针:输出一个 nonce,会话里让 Miyu 原样回显即可确认注入到达模型
     Probe,
+    /// 规则页:扫描当前目录范围的 AGENTS.md/CLAUDE.md 等指令文件
+    Rules {
+        /// 勾选一个扫描结果(可多次);不带 --select 时只列出扫描结果
+        #[arg(long)]
+        select: Vec<std::path::PathBuf>,
+        /// 清空全部勾选
+        #[arg(long)]
+        clear: bool,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -500,6 +509,9 @@ pub(in crate::cli) async fn run_purge(paths: &MiyuPaths, args: PurgeArgs) -> Res
                 println!("{}", std::fs::read_to_string(&path).unwrap_or_default());
             }
         }
+        PurgeCommand::Rules { select, clear } => {
+            run_purge_rules(paths, &select, clear).await?;
+        }
         PurgeCommand::Selfcheck => {
             let config = AppConfig::load_or_default(paths)?;
             let purge = &config.purge;
@@ -620,6 +632,115 @@ pub(in crate::cli) async fn run_purge(paths: &MiyuPaths, args: PurgeArgs) -> Res
                 )
             );
         }
+    }
+    Ok(())
+}
+
+/// `miyu purge rules`：列出当前目录范围内的指令文件，或增删勾选。
+///
+/// 勾选只被记录，真正生效要下一轮 Agent 构造时重读配置（构造期折段，
+/// 会话期冻结）。所以改完勾选提示用户开新会话或 reload。
+async fn run_purge_rules(
+    paths: &MiyuPaths,
+    select: &[std::path::PathBuf],
+    clear: bool,
+) -> Result<()> {
+    use miyu_base::config::purge_rules;
+
+    let cwd = std::env::current_dir().context("resolving current directory")?;
+    let scanned = purge_rules::scan_cwd_instructions(&cwd);
+
+    let mut config = AppConfig::load_or_default(paths)?;
+    if clear {
+        config.purge.rule_selections.clear();
+        config.save(paths)?;
+        println!("{}", t("cleared every rule selection", "已清空全部规则勾选"));
+    }
+    if !select.is_empty() {
+        // 勾选必须命中当前扫描结果：跨目录的路径存进去也不会生效，
+        // 与其静默失败不如当场说清楚。
+        let known = scanned
+            .iter()
+            .map(|c| std::fs::canonicalize(&c.path).unwrap_or_else(|_| c.path.clone()))
+            .collect::<std::collections::HashSet<_>>();
+        for raw in select {
+            let absolute = if raw.is_absolute() {
+                raw.clone()
+            } else {
+                cwd.join(raw)
+            };
+            let canonical = std::fs::canonicalize(&absolute).unwrap_or(absolute.clone());
+            if !known.contains(&canonical) {
+                eprintln!(
+                    "{}: {}",
+                    t(
+                        "skipped (not in the current directory's scan)",
+                        "已跳过（不在当前目录的扫描结果里）"
+                    ),
+                    absolute.display()
+                );
+                continue;
+            }
+            let text = canonical.to_string_lossy().to_string();
+            if !config.purge.rule_selections.contains(&text) {
+                config.purge.rule_selections.push(text);
+            }
+        }
+        config.save(paths)?;
+    }
+
+    println!(
+        "{} {}",
+        t("scanning:", "扫描目录:"),
+        cwd.display()
+    );
+    if scanned.is_empty() {
+        println!(
+            "  {}",
+            t(
+                "(no AGENTS.md / CLAUDE.md found up to the project root)",
+                "（到项目根为止没找到 AGENTS.md / CLAUDE.md）"
+            )
+        );
+    }
+    for item in &scanned {
+        let scope = match item.scope {
+            purge_rules::CwdScope::Cwd => t("cwd", "当前目录"),
+            purge_rules::CwdScope::Root => t("root", "项目根"),
+            purge_rules::CwdScope::Ancestor => t("ancestor", "上级目录"),
+        };
+        let canonical =
+            std::fs::canonicalize(&item.path).unwrap_or_else(|_| item.path.clone());
+        let chosen = config
+            .purge
+            .rule_selections
+            .iter()
+            .any(|s| std::path::Path::new(s) == canonical);
+        println!(
+            "  [{}] {} ({}, {} B)",
+            if chosen { "x" } else { " " },
+            item.path.display(),
+            scope,
+            item.size
+        );
+        if !item.preview.is_empty() {
+            println!("      {}", item.preview);
+        }
+    }
+    println!(
+        "{} {}/{}",
+        t("selected:", "已勾选:"),
+        config.purge.rule_selections.len(),
+        scanned.len()
+    );
+    if !config.purge.rule_selections.is_empty() {
+        println!(
+            "{}",
+            t(
+                "note: selections apply to new sessions (the section is frozen per session)",
+                "提示：勾选对新会话生效（注入段按会话冻结）"
+            )
+        );
     }
     Ok(())
 }

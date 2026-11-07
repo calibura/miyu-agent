@@ -48,6 +48,14 @@ pub struct PurgeConfig {
     /// 极简强化段:追加在注入正文尾部的一小段重申(对照 dsh-purge 的 boost)。
     /// 默认开;关了就只发注入文件正文。
     pub boost: bool,
+    /// 规则页勾选的本地指令文件（绝对路径）。
+    ///
+    /// 移植自 dsh-purge 的「CWD 规则」：把这些文件的正文拼进注入段。只有**仍在
+    /// 当前 cwd 扫描结果里**的路径会生效——换目录后旧勾选不会跨目录偷偷带入，
+    /// 这是刻意的防穿越设计（见 [`super::purge_rules::assemble_selected`]）。
+    ///
+    /// 默认空 = 不注入任何工作区指令文件。
+    pub rule_selections: Vec<String>,
 }
 
 impl Default for PurgeConfig {
@@ -59,6 +67,7 @@ impl Default for PurgeConfig {
             net_allowlist: Vec::new(),
             sandbox_passthrough: true,
             boost: true,
+            rule_selections: Vec::new(),
         }
     }
 }

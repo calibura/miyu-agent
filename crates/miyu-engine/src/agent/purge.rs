@@ -26,8 +26,14 @@ impl PurgeInjection {
     ) -> Self {
         let text = config.purge.inject_text(paths).unwrap_or_default();
         let flags = miyu_base::config::PurgeFlags::resolve(&config.purge, &text);
+        // 规则页勾选的工作区指令文件：拼在注入正文之后、boost 之前。路径只在
+        // 当前 cwd 扫描结果里才生效（防跨目录穿越），所以这里取会话的 cwd；
+        // 拿不到 cwd 就当空——规则页跟着「在哪个目录干活」走。
+        let rules_block = rules_block(config);
         Self {
-            section: flags.inject.then(|| Self::assemble_from(&text, &flags)),
+            section: flags
+                .inject
+                .then(|| Self::assemble_from(&text, &rules_block, &flags)),
         }
     }
 
@@ -36,7 +42,13 @@ impl PurgeInjection {
     pub(in crate::agent) fn from_text(config: &miyu_base::config::AppConfig, text: &str) -> Self {
         let flags = miyu_base::config::PurgeFlags::resolve(&config.purge, text);
         Self {
-            section: flags.inject.then(|| Self::assemble_from(text, &flags)),
+            // 显式正文路径也要带规则块:测试里配了 rule_selections 就该看见它,
+            // 否则「规则页生效」这件事在测试面根本不可验。
+            // 规则块跟 cwd 走（进程当前目录）;显式正文路径没有 paths 上下文,
+            // 与 resolve 同一取法。
+            section: flags
+                .inject
+                .then(|| Self::assemble_from(text, &rules_block(config), &flags)),
         }
     }
 
@@ -45,14 +57,40 @@ impl PurgeInjection {
         self.section.as_deref()
     }
 
-    fn assemble_from(text: &str, flags: &miyu_base::config::PurgeFlags) -> String {
+    fn assemble_from(
+        text: &str,
+        rules_block: &str,
+        flags: &miyu_base::config::PurgeFlags,
+    ) -> String {
         let body = text.trim();
-        let mut section = format!("<{PURGE_SECTION_TAG}>\n{body}\n</{PURGE_SECTION_TAG}>");
+        let mut section = format!("<{PURGE_SECTION_TAG}>\n{body}\n");
+        if !rules_block.is_empty() {
+            section.push_str("\n<!-- miyu-purge:workspace-rules -->\n");
+            section.push_str(rules_block);
+            section.push('\n');
+        }
+        section.push_str(&format!("</{PURGE_SECTION_TAG}>"));
         if flags.boost {
             section.push_str(BOOST_SECTION);
         }
         section
     }
+}
+
+/// 规则页勾选的本地指令文件拼装。cwd 取进程当前目录——Agent 是在 CLI/daemon
+/// 的工作目录里构造的,那里就是「在哪个目录干活」。
+fn rules_block(config: &miyu_base::config::AppConfig) -> String {
+    if config.purge.rule_selections.is_empty() {
+        return String::new();
+    }
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let selections = config
+        .purge
+        .rule_selections
+        .iter()
+        .map(std::path::PathBuf::from)
+        .collect::<Vec<_>>();
+    miyu_base::config::purge_rules::assemble_selected(&cwd, &selections)
 }
 
 #[cfg(test)]

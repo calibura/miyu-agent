@@ -111,3 +111,53 @@ fn purge_section_is_frozen_per_agent_across_rebuilds() {
     assert!(fresh.system_prompt.contains("edited mid-session"));
     assert!(!fresh.system_prompt.contains("first"));
 }
+
+/// 规则页勾选的工作区指令文件要拼进 <purge-mode> 段内、boost 之前。
+/// 勾选路径不在当前 cwd 扫描结果里时不得生效（防跨目录穿越）。
+#[test]
+fn purge_workspace_rules_join_the_section_when_the_selection_is_in_scope() {
+    let temp = tempfile::tempdir().unwrap();
+    let agents = temp.path().join("AGENTS.md");
+    std::fs::write(&agents, "workspace rule body").unwrap();
+    // 规则块按**进程 cwd** 扫描（Agent 在 CLI/daemon 的工作目录里构造），
+    // 所以测试必须真的把 cwd 挪过去——否则勾选的绝对路径不在扫描结果里,
+    // 会被防穿越逻辑正确地丢掉,断言看起来像 bug 其实是语义正确。
+    let previous = std::env::current_dir().unwrap();
+    std::env::set_current_dir(temp.path()).unwrap();
+
+    let paths = test_paths(temp.path());
+    ensure_inject_file(&paths.config_dir).unwrap();
+    let mut config = AppConfig::default();
+    config.purge.enabled = true;
+    config.purge.rule_selections = vec![agents.to_string_lossy().to_string()];
+
+    let state = StateStore::new(&paths).unwrap();
+    state.init_files().unwrap();
+    let client =
+        OpenAiCompatibleClient::new(config.provider(None).unwrap(), &config, &paths).unwrap();
+    let tools =
+        crate::tools::build_tool_registry(&config, &paths, PersonaLane::Active, true).unwrap();
+    let mut agent = Agent::new_for_audience(
+        config,
+        &paths,
+        state,
+        client,
+        tools,
+        PersonaLane::Active,
+        PromptAudience::Owner,
+    )
+    .unwrap();
+    agent.prepare_for_turn().unwrap();
+    let prompt = agent.system_prompt.clone();
+    std::env::set_current_dir(previous).unwrap();
+
+    assert!(
+        prompt.contains("workspace rule body"),
+        "规则正文进了 system"
+    );
+    assert!(prompt.contains("miyu-purge:workspace-rules"));
+    // 段内顺序:规则块在 boost 之前。
+    let rules_at = prompt.find("miyu-purge:workspace-rules").unwrap();
+    let boost_at = prompt.find("<purge-boost").unwrap();
+    assert!(rules_at < boost_at, "规则块在强化段之前");
+}

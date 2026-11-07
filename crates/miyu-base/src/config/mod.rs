@@ -16,6 +16,7 @@ mod platform_plugins;
 mod pool_ref;
 mod provider;
 pub mod purge;
+pub mod purge_rules;
 pub use provider::append_resolved_api_keys;
 mod provider_ops;
 pub(crate) mod subsystems;
