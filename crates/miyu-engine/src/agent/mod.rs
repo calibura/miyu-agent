@@ -11,6 +11,7 @@ pub use platform_port::PlatformTurn;
 mod journal;
 pub(crate) mod prompt;
 mod purge;
+mod refusal_retry;
 pub use prompt::prompt_strip_tagged;
 mod pruning;
 mod reasoning;
@@ -185,6 +186,13 @@ pub enum AgentEvent {
         prompt_id: String,
         round: u32,
         max: u32,
+    },
+    /// purge 拒绝重试：模型这一轮开头像在拒，已用加固话术重跑（§purge，
+    /// 移植 dsh-purge 的 refusal-retry）。`head` 是命中原话的前 80 字符，
+    /// 给用户和事后排查用——「误判」比「漏判」更烦人，得能看见判据。
+    PurgeRefusalRetry {
+        attempt: u32,
+        head: String,
     },
     /// 回合内每次模型请求结束时的用量快照:`round` 是刚结束这次请求的
     /// 用量(其 prompt+completion ≈ 当前上下文占用),`turn` 是回合开始

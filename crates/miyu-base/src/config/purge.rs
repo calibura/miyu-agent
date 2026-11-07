@@ -65,6 +65,12 @@ pub struct PurgeConfig {
     pub continue_max: u32,
     /// 续跑时发的那句话。默认「继续」。
     pub continue_text: String,
+    /// 拒绝检测重试（移植 dsh-purge 的 `refusal-retry`）。
+    ///
+    /// 注入段是**事前**加固；模型仍然拒的时候，这一层是事后兜底：缓冲开头
+    /// 几百字符，判定像拒绝就丢掉这次输出、把加固话术追加到 system 尾重跑
+    /// 一次。默认**关**——重跑一次等于双倍 token，得用户明确要。
+    pub refusal_retry: bool,
 }
 
 impl Default for PurgeConfig {
@@ -80,6 +86,7 @@ impl Default for PurgeConfig {
             auto_continue: false,
             continue_max: 3,
             continue_text: "继续".to_string(),
+            refusal_retry: false,
         }
     }
 }
@@ -106,6 +113,71 @@ impl PurgeConfig {
             return false;
         }
         rounds_done < self.continue_max
+    }
+
+    /// 拒绝重试此刻开不生效。总开关 + 子开关都开才算。
+    pub fn refusal_retry_enabled(&self) -> bool {
+        self.effective(self.refusal_retry)
+    }
+
+    /// 续跑/重试遇到这些错误码时一律放弃——重试也变不出结果。
+    ///
+    /// 移植自 dsh-purge `continue-retry.js` 的 `PERMANENT_CODES`。分类的价值在
+    /// 于省额度：认证失败、额度用尽、模型不存在、上下文超限这些，续跑三次只
+    /// 是把同一个错误再撞三遍。
+    pub const PERMANENT_ERROR_CODES: &'static [&'static str] = &[
+        "AUTH",
+        "UNAUTHORIZED",
+        "FORBIDDEN",
+        "INVALID",
+        "INVALID_REQUEST",
+        "QUOTA",
+        "ACCOUNT_QUOTA",
+        "BILLING",
+        "MODEL_NOT_FOUND",
+        "CONTEXT_OVERFLOW",
+        "CONTEXT_LENGTH",
+        "CONTEXT_WINDOW_EXCEEDED",
+        "NO_ADAPTER",
+        "MISSING_CREDENTIAL",
+        "INVALID_CREDENTIAL",
+    ];
+
+    /// 这些错误连「继续」都救不回来（永久错误 + 瞬时但与本轮内容无关的）。
+    /// 对照 dsh 的 `NO_CONTINUE_CODES`。
+    pub const NO_CONTINUE_ERROR_CODES: &'static [&'static str] = &[
+        "AUTH",
+        "UNAUTHORIZED",
+        "FORBIDDEN",
+        "INVALID",
+        "INVALID_REQUEST",
+        "QUOTA",
+        "ACCOUNT_QUOTA",
+        "BILLING",
+        "MODEL_NOT_FOUND",
+        "CONTEXT_OVERFLOW",
+        "CONTEXT_LENGTH",
+        "CONTEXT_WINDOW_EXCEEDED",
+        "NO_ADAPTER",
+        "MISSING_CREDENTIAL",
+        "INVALID_CREDENTIAL",
+        "RATE_LIMIT",
+        "TRANSPORT",
+    ];
+
+    /// 这个错误码是不是永久性的（重试无意义）。
+    pub fn is_permanent_error(code: &str) -> bool {
+        let normalized = code.trim().to_ascii_uppercase();
+        Self::PERMANENT_ERROR_CODES.contains(&normalized.as_str())
+    }
+
+    /// 这个错误码下还该不该续跑。
+    pub fn should_continue_after_error(&self, code: &str, rounds_done: u32) -> bool {
+        let normalized = code.trim().to_ascii_uppercase();
+        if Self::NO_CONTINUE_ERROR_CODES.contains(&normalized.as_str()) {
+            return false;
+        }
+        self.should_auto_continue(rounds_done, true)
     }
 
     /// 出站白名单的规范化条目:去空白、去空行、`账号@主机` 只留主机。
@@ -497,5 +569,37 @@ mod tests {
         assert!(!purge.auto_continue, "默认必须关:续跑烧额度");
         assert_eq!(purge.continue_max, 3);
         assert_eq!(purge.continue_text, "继续");
+    }
+
+    #[test]
+    fn error_code_classification_matches_the_dsh_table() {
+        // 永久错误：重试变不出结果。
+        for code in ["AUTH", "auth", " QUOTA ", "BILLING", "CONTEXT_OVERFLOW"] {
+            assert!(
+                PurgeConfig::is_permanent_error(code),
+                "{code} should be permanent"
+            );
+        }
+        // 瞬时/未知：重试有意义。
+        for code in ["TIMEOUT", "SERVER_BUSY", "", "529"] {
+            assert!(
+                !PurgeConfig::is_permanent_error(code),
+                "{code} should not be permanent"
+            );
+        }
+
+        // 续跑判定：永久错误与限流/传输都拦下。
+        let purge = PurgeConfig {
+            enabled: true,
+            auto_continue: true,
+            ..PurgeConfig::default()
+        };
+        assert!(!purge.should_continue_after_error("RATE_LIMIT", 0));
+        assert!(!purge.should_continue_after_error("TRANSPORT", 0));
+        assert!(!purge.should_continue_after_error("BILLING", 0));
+        // 未知错误 + 轮次未到 → 续。
+        assert!(purge.should_continue_after_error("TIMEOUT", 0));
+        // 轮次到顶仍然停。
+        assert!(!purge.should_continue_after_error("TIMEOUT", 3));
     }
 }

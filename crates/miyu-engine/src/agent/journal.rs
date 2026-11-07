@@ -292,6 +292,11 @@ impl TurnJournalSink {
                     max,
                 })
             }
+            AgentEvent::PurgeRefusalRetry { attempt, head } => {
+                // 拒绝重试也是可见事件：用户该知道「模型刚才在拒，我又推了一次」。
+                self.flush(on_event)?;
+                on_event(AgentEvent::PurgeRefusalRetry { attempt, head })
+            }
             AgentEvent::QueuedPromptsConsumed {
                 prompt_ids,
                 mode,

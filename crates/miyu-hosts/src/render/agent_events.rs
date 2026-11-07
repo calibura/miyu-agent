@@ -89,6 +89,18 @@ pub fn apply_agent_event(
             renderer.write_system_message(&text)?;
             renderer.tick_spinner()
         }
+        // purge 拒绝重试：一行提示，让用户知道模型刚才在拒、又被推了一次。
+        AgentEvent::PurgeRefusalRetry { attempt, .. } => {
+            let text = format!(
+                "{} (#{attempt})",
+                t(
+                    "purge refusal retry - the model started to decline, asking again",
+                    "purge 拒绝重试——模型开头在拒，已加固重问"
+                )
+            );
+            renderer.write_system_message(&text)?;
+            renderer.tick_spinner()
+        }
         AgentEvent::SpinnerTick => renderer.tick_spinner(),
         AgentEvent::CompactStart => {
             let text = t("Compacting context...", "正在压缩上下文...");

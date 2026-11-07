@@ -1163,6 +1163,13 @@
           kind: "toggle",
           default: true,
         },
+        {
+          path: "purge.refusal_retry",
+          label: t("拒绝重试"),
+          hint: t("注入段是事前加固;模型仍然开口就拒时,这一层缓冲开头几百字符判定像拒绝就用加固话术重跑一次。每轮只给一次机会,重跑等于双倍 token"),
+          kind: "toggle",
+          default: false,
+        },
       ],
     },
     {

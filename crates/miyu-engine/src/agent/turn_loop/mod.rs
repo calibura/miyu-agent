@@ -144,6 +144,18 @@ impl Agent {
                 .await?;
                 continue;
             };
+            // purge 拒绝检测（移植 dsh-purge refusal-retry）：模型这一轮没有调
+            // 任何工具、只吐了一段正文，如果开头就是在拒，用加固话术重跑一次。
+            // 只在 purge 开着且本轮还没重试过时做——重试一次不成就认，别死循环。
+            if result.tool_calls.is_empty() && self.should_retry_refusal(&result, &st) {
+                st.refusal_retries = st.refusal_retries.saturating_add(1);
+                self.inject_refusal_nudge(messages);
+                on_event(AgentEvent::PurgeRefusalRetry {
+                    attempt: st.refusal_retries,
+                    head: crate::agent::refusal_retry::head_preview(&result.content),
+                })?;
+                continue;
+            }
             self.finish_round_stream(
                 current_turn_id,
                 messages,
@@ -215,6 +227,29 @@ impl Agent {
     /// **失败只告警不中断回合**:这是一次耐久性检查点,不是回合的产出。为了它
     /// 把一个正在跑的回合掐掉,比丢掉这份检查点糟得多——回合结束时那次写入仍然
     /// 是 `?`,真有持久化问题跑不掉。
+    /// 这一轮该不该按「模型在拒绝」重跑一次（§purge，移植 dsh-purge）。
+    ///
+    /// 三个前提：
+    /// 1. purge 的 refusal_retry 开关开着（默认关——重跑一次是双倍 token）；
+    /// 2. 本轮还没重试过（dsh 也只给一次机会，递归重试只会白烧额度）；
+    /// 3. 正文开头命中拒绝模式（带元信号保护，长答案谈注入不算）。
+    fn should_retry_refusal(&self, result: &ChatResult, st: &RoundState) -> bool {
+        if !self.core.config.purge.refusal_retry_enabled() {
+            return false;
+        }
+        if st.refusal_retries > 0 {
+            return false;
+        }
+        crate::agent::refusal_retry::looks_like_refusal(&result.content)
+    }
+
+    /// 把加固话术追加进 messages 的 system 尾。
+    ///
+    /// 只动 system，不碰用户注入正文（那是 purge-inject.md 的地盘）。
+    fn inject_refusal_nudge(&self, messages: &mut Vec<ChatMessage>) {
+        crate::agent::refusal_retry::append_nudge(messages);
+    }
+
     fn checkpoint_tool_flow(&self, turn_id: &str, messages: &[ChatMessage], replay_start: usize) {
         let mut tool_flow = derive_tool_flow(messages, replay_start, false);
         self.append_remote_tool_flow(&mut tool_flow);

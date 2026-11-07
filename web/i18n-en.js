@@ -406,6 +406,8 @@ window.MIYU_I18N_EN = Object.freeze({
   "禁用 {id}?写一个 .disabled 标记文件,正文保留,随时可启用。": "Disable {id}? This writes a .disabled marker; the body stays and can be re-enabled at any time.",
   "许可": "License",
   "资源树里出厂那份": "The factory copy shipped in the resource tree",
+  "拒绝重试": "Refusal retry",
+  "注入段是事前加固;模型仍然开口就拒时,这一层缓冲开头几百字符判定像拒绝就用加固话术重跑一次。每轮只给一次机会,重跑等于双倍 token": "The injected section is pre-emptive hardening. When the model still opens with a refusal, this layer buffers the first few hundred characters, and if it reads as a refusal it reruns once with a hardened nudge. One retry per turn; a rerun costs double the tokens.",
   "Purge 模式": "Purge mode",
   "启用 purge": "Enable purge",
   "总开关。关着时所有挂接点与上游逐字节一致,零行为变化;子开关一律无效": "Master switch. Off means every hook is byte-identical to upstream with zero behaviour change; the sub-switches do nothing.",

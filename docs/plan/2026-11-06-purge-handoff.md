@@ -277,23 +277,43 @@ voice 任务的完整清单（purge-port.md「已知边界」+ 本次会话核�
 
 ## 六、dsh-purge 对照材料在哪
 
-对比结论的原始依据（这次会话现场挖的，路径都在本机）：
+**权威位置是持久目录 `~/Documents/dsh-purge-ref/`**（2026-11-07 从 `/tmp` 迁出
+——`/tmp` 重启就没了，之前的解包确实丢过一次，重新解包才发现）：
 
 | 材料 | 路径 |
 | --- | --- |
-| 插件 tarball（已解包） | `/tmp/dshpurge/package/`（**临时目录，重启会被清；要留就先拷走**） |
-| 原始 tarball | `~/.dsh/dsh-purge-community/pkgs/f742c17f…/dsh-purge-community-1.6.60.tgz` |
-| 67 条补丁清单 | 解包后 `lib/core.js` 里的 `PATCHES` 数组，按 `layer` 分：提示词 19 / 代码 36 / 工具 6 / 0.2.0 兼容 2 |
-| 注入正文范本 | `~/.dsh/prompt-inject.md`（225 行） |
-| UI 截图 | `~/.dsh/dsh-purge-community/…` 与解包包 `docs/preview/`（`dock-drill.png` 是演练台全貌） |
-| 演练台 10 标签定义 | 解包包 `lib/redteam/client.js` 搜 `tabs = [` |
-| 规则页实现 | 解包包 `lib/rules.js` |
-| 技能页实现 | 解包包 `lib/skills.js` |
-| 自身服务器白名单 | 解包包 `lib/core.js` + 截图 `docs/preview/own-servers.png` |
+| 整个插件解包（74 个 lib 模块 + presets + skills + docs） | `~/Documents/dsh-purge-ref/package/` |
+| 原始 tarball | `~/Documents/dsh-purge-ref/dsh-purge-community-1.6.60.tgz` |
+| 注入正文范本（225 行） | `~/Documents/dsh-purge-ref/prompt-inject.md` |
 
-**注意**：`/tmp/dshpurge` 是临时目录。要长期留档，把 `lib/rules.js`、`lib/skills.js`、
-`lib/redteam/client.js` 里 `tabs` 那段、`lib/core.js` 里 `PATCHES` 数组拷进
-`docs/plan/` 或 `docs/fixed/` 再引用。
+要从 tarball 重新解包：
+
+```sh
+rm -rf ~/Documents/dsh-purge-ref/package
+mkdir -p /tmp/dshpurge
+tar xzf ~/Documents/dsh-purge-ref/dsh-purge-community-1.6.60.tgz -C /tmp/dshpurge
+cp -a /tmp/dshpurge/package ~/Documents/dsh-purge-ref/
+```
+
+以下是按功能定位的索引（行号会随版本变，用 grep 找）：
+
+| 材料 | 路径 |
+| --- | --- |
+| 67 条补丁清单 | `package/lib/core.js` 的 `PATCHES` 数组（按 `layer` 分：提示词 19 / 代码 36 / 工具 6 / 0.2.0 兼容 2） |
+| 演练台 10 标签 | `package/lib/redteam/client.js` 搜 `tabs = [` |
+| 规则页实现 | `package/lib/rules.js`（17,682 B） |
+| 技能页实现 | `package/lib/skills.js`（28,405 B） |
+| 自动续跑 + 重试 | `package/lib/continue-retry.js`（11,607 B）——含错误码分类，见下 |
+| 拒绝检测重试 | `package/lib/refusal-retry.js`——命中模式 + 单次重试话术 |
+| 国内站点判定 | `package/lib/net-scope.js`（15,926 B）——中文域名 punycode 表 |
+| 审计 | `package/lib/audit.js` |
+| 回退 | `package/lib/rewind.js`（20,787 B） |
+| 自身服务器白名单 | `package/lib/core.js` + 截图 `package/docs/preview/own-servers.png` |
+| UI 截图（演练台全貌等） | `package/docs/preview/`（`dock-drill.png` / `dock-clean.png` / `own-servers.png`） |
+
+`~/.dsh/` 下还有运行时状态（`dsh-purge/` 的 applied.json / audit.jsonl、
+`dsh-purge-community/pkgs/` 的原始 tgz），但**它们会随 dsh 升级变动**；
+要长期引用请以 `~/Documents/dsh-purge-ref/` 为准。
 
 ## 七、必须遵守的纪律（今天踩过的坑）
 

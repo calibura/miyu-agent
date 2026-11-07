@@ -33,6 +33,10 @@ pub(super) struct RoundState {
     /// purge 自动续跑已经补过几次「继续」（§purge）。回合内累计，跨回合清零
     /// ——用户新发一条消息就是新回合、新预算。
     pub(super) purge_continue_rounds: std::cell::Cell<u32>,
+    /// purge 拒绝重试已经用掉几次。dsh 那边只给一次机会（`streamWithRefusalRetry`
+    /// 命中即重跑一次、不递归），这里照办：重试一次还不成，就是这轮确实答不出，
+    /// 反复重跑只会白烧额度。
+    pub(super) refusal_retries: u32,
 }
 
 impl RoundState {
@@ -58,6 +62,7 @@ impl RoundState {
             repeat_gate: ToolRepeatGate::new(),
             repeat_fused: false,
             purge_continue_rounds: std::cell::Cell::new(0),
+            refusal_retries: 0,
         }
     }
 }

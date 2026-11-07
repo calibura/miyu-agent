@@ -501,6 +501,15 @@ impl RunEventMapper {
                     "max": max,
                 }),
             ),
+            AgentEvent::PurgeRefusalRetry { attempt, head } => self.publish(
+                "purge.refusal_retry",
+                json!({
+                    "run_id": self.run_id,
+                    "turn_id": self.turn_id,
+                    "attempt": attempt,
+                    "head": head,
+                }),
+            ),
             AgentEvent::SpinnerTick => {}
             // 逐请求计量快照:round 为刚结束请求的用量(prompt+completion
             // ≈ 当前上下文占用),turn 为回合累计。前端据此在回合中途刷新
