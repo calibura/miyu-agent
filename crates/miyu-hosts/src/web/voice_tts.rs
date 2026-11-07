@@ -1417,4 +1417,73 @@ mod tests {
             "{head}"
         );
     }
+
+    /// openai_compat 的端到端：gptsovits/mimo 都有 mock server 测试，这条
+    /// 补齐缺口。验证请求形状（路径、鉴权头、JSON 字段）与响应解码。
+    #[tokio::test]
+    async fn synthesize_openai_compat_end_to_end_against_mock_server() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let wav = fake_wav();
+        let reply_wav = wav.clone();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = Vec::new();
+            let mut chunk = [0u8; 4096];
+            let (head, body_start) = loop {
+                let read = stream.read(&mut chunk).unwrap();
+                buffer.extend_from_slice(&chunk[..read]);
+                if let Some(pos) = buffer.windows(4).position(|w| w == b"\r\n\r\n") {
+                    break (String::from_utf8_lossy(&buffer[..pos]).to_string(), pos + 4);
+                }
+            };
+            let length: usize = head
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length:")
+                        .map(|v| v.trim().parse().unwrap())
+                })
+                .unwrap();
+            while buffer.len() < body_start + length {
+                let read = stream.read(&mut chunk).unwrap();
+                buffer.extend_from_slice(&chunk[..read]);
+            }
+            let body: Value =
+                serde_json::from_slice(&buffer[body_start..body_start + length]).unwrap();
+            let _ = stream.write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: audio/wav\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    reply_wav.len()
+                )
+                .as_bytes(),
+            );
+            let _ = stream.write_all(&reply_wav);
+            (head, body)
+        });
+        let mut cfg = OpenAiCompatTtsConfig {
+            base_url: format!("http://127.0.0.1:{port}/v1"),
+            model: "fishaudio/fish-speech-1.5".to_string(),
+            voice: "default".to_string(),
+            api_key: Some("sk-test-key".to_string()),
+            ..Default::default()
+        };
+        cfg.timeout_seconds = 10;
+        let audio = synthesize_openai_compat(&cfg, "测试一句").await.unwrap();
+        assert_eq!(audio, wav);
+        let (head, body) = server.join().unwrap();
+        // OpenAI 兼容形状：POST {base}/audio/speech。
+        assert!(head.starts_with("POST /v1/audio/speech "), "{head}");
+        assert_eq!(body["model"], "fishaudio/fish-speech-1.5");
+        assert_eq!(body["voice"], "default");
+        assert_eq!(body["input"], "测试一句");
+        assert_eq!(body["response_format"], "wav");
+        // 带了 key 就要有 Bearer。
+        assert!(
+            head.to_ascii_lowercase()
+                .contains("authorization: bearer sk-test-key"),
+            "{head}"
+        );
+    }
 }
