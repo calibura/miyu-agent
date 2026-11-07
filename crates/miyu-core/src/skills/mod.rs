@@ -364,6 +364,42 @@ mod tests {
         }
     }
 
+    /// 把一份真实技能库(默认是导入到 `~/.miyu/extensions/skills` 的 23 个
+    /// 红队技能)整个喂给生产解析路径,验证 frontmatter 全都能过。
+    ///
+    /// 为什么不写成普通测试:它读的是**本机装好的**技能库,CI 上没有那份数据。
+    /// 需要时手动跑:
+    ///   cargo test -p miyu-core --lib scan_installed_skill_library -- --ignored --nocapture
+    #[test]
+    #[ignore = "depends on the skills installed in $MIYU_HOME"]
+    fn scan_installed_skill_library() {
+        let paths = MiyuPaths::new().expect("resolve the real Miyu home");
+        let config = AppConfig::load_or_default(&paths).expect("load config");
+        println!("skills_dir = {}", paths.skills_dir.display());
+        let entries = discover(&config, &paths).expect("discover skills");
+        println!("catalog entries = {}", entries.len());
+        let mut failures = Vec::new();
+        for entry in &entries {
+            if let Err(error) = load(&entry.metadata.name, &config, &paths) {
+                failures.push(format!("{}: {error}", entry.metadata.name));
+            }
+        }
+        for entry in &entries {
+            println!(
+                "  {} [{}] {}",
+                entry.metadata.name,
+                entry.source.as_str(),
+                entry.metadata.ui_summary()
+            );
+        }
+        assert!(
+            failures.is_empty(),
+            "{} skill(s) failed to load:\n{}",
+            failures.len(),
+            failures.join("\n")
+        );
+    }
+
     fn test_paths(root: &Path) -> MiyuPaths {
         MiyuPaths {
             root_dir: root.to_path_buf(),
