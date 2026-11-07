@@ -158,6 +158,46 @@ prompt（`continue_text`，默认「继续」），复用既有插话链路。�
 `PurgeAutoContinue{round,max}` → 终端一行提示 + WebUI `purge.auto_continue`。
 门槛逻辑抽成 `should_auto_continue` 纯函数，测试 5 条。
 
+### 2.3.2 已完成里程碑 M6/M7：拒绝重试与错误码分类
+
+这两项是 2026-11-07 对照 dsh-purge 74 个 lib 模块时挑出来的「还有价值」的部分
+（对照材料已迁到持久目录 `~/Documents/dsh-purge-ref/`，见交接单第六节）。
+
+**M6 拒绝重试**（commit `c066684`，已推送）
+
+`crates/miyu-engine/src/agent/refusal_retry.rs`。purge 的注入段是**事前**加固；
+这一层是**事后**兜底——模型这一轮只吐正文、没调工具，且开头像拒绝，就把加固
+话术追加到 system 尾、重跑一次。
+
+移植时特意保留的两个 dsh 经验：
+
+1. **模式表要收中文软拒绝开场**（「这一步我不做」「我也不会帮你把它包装成」），
+   它们在实际会话里比「我不能」更常见，只看硬拒绝会漏掉一半。
+2. **长答案谈到「提示词注入/越狱」不算拒绝**（整段 >280 字符 + 首屏有元信号
+   就放过）。不加这条，一篇讲注入原理的回答会被反复判成拒绝然后无限重试。
+
+重试话术刻意**不宣称「已授权」**——那会让模型转去讨论授权本身；改成「给完整
+方案 + 末尾一句问是否执行」。只给一次机会（`RoundState.refusal_retries`）。
+开关 `purge.refusal_retry` 默认关（重跑等于双倍 token）。
+
+**M7 错误码分类**（同 commit）
+
+`PurgeConfig::PERMANENT_ERROR_CODES` / `NO_CONTINUE_ERROR_CODES`，移植自
+`continue-retry.js`。认证失败、额度用尽、模型不存在、上下文超限、`RATE_LIMIT`、
+`TRANSPORT` 这些，续跑三次只是把同一个错误再撞三遍。提供
+`is_permanent_error` / `should_continue_after_error` 两个判定，留给后续把错误码
+接进续跑链路。
+
+### 2.3.3 界面：技能可见性（M8）
+
+commit `2aba0e1` + 修复 `d863f7d`。WebUI 侧栏「技能」面板（表格/来源分段/搜索/
+抽屉/禁用）+ TUI `/skills`。两边都走 `miyu_core::skills::discover`，与模型拿到的
+`<available-skills>` 同口径，消除「CLI 列出来但模型用不了」的不一致。
+
+`/skills` 的输出第一版塞进了 `repl_note`，而那层走 toast、上限 **2 行**
+（`tail/screen/toast.rs:35` 的 `MAX_TOAST_LINES`）——26 行清单直接不显示。
+改成 `apply_output_frame` 落滚动区。
+
 ---
 
 ## 三、dsh-purge 插件移植专项
@@ -182,7 +222,9 @@ prompt（`continue_text`，默认「继续」），复用既有插话链路。�
 | 自动更新 | 有 | ❌（git 拉取即可） | ➖ 不需要 |
 | 加密槽默认稿 | 有 | ❌ 明文模板 | ➖ 单机场景收益低 |
 | autoContinue | 有 | ✅ 三闸 + 上限 3（M5，`903d716`） | ✅ 对等 |
-| autoRetry | 有 | ❌ 无 | 📋 未排（上层已有重试，purge 层可不做） |
+| **拒绝重试**（refusal-retry） | 有（122 行 JS） | ✅ 模式表 + 误判保护 + 一次重试（M6，`c066684`） | ✅ 对等 |
+| autoRetry 错误码分类 | 有 | ✅ 永久错误表 + 续跑判定（M7，`c066684`） | ✅ 对等 |
+| 国内站点判定（net-scope） | 有（中文域名 punycode 表） | ❌ 无 | 📋 可选，看要不要地域维度 |
 
 ### 3.2 移植的架构差异（为什么 miyu 不需要 67 条补丁）
 
