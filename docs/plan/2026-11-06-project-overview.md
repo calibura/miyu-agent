@@ -127,11 +127,36 @@ QQ（OneBot 协议）是目前唯一实装的平台：`platforms/onebot/`（disp
 
 | 任务 | 量级 | 一句话 |
 | --- | --- | --- |
-| 规则页 | 中 | 扫描 cwd→projectRoot 的 AGENTS/CLAUDE.md，三档策略，拼进注入 |
-| 审计与备份 | 小 | `purge-audit.jsonl` + `purge edit --reset` 带备份 |
-| 自动重试/续跑 | 小 | dsh 的 `autoRetry`/`autoContinue`（continueText=“继续”，上限 3） |
 | 演练台 | **大** | 红队子系统：10 标签页、5 角色、56 工具、SQLite 资产库、23 技能。
 **单独立项，先出方案拍板，别顺手做** |
+| purge 规则页的写回侧 | 小 | dsh 的规则还能写 `AGENTS.md`（`RULE_TARGETS` + 备份）。miyu 只做了读侧；写回工作区文件是破坏性动作，等用户明确要 |
+| 自动重试（autoRetry） | 小 | dsh 的 `autoRetry`+`retryMax`：请求失败自动重试。miyu 现在靠上层重试，未做 purge 层 |
+
+### 2.3.1 已完成里程碑 M3/M4/M5
+
+**M3 规则页**（commit `fc5c94f`，已推送）
+
+`crates/miyu-base/src/config/purge_rules.rs`：从 cwd 向上到项目根（`.git`/`.hg`/`.svn`
+为界，上限 32 层）扫四个候选文件名；勾选只记路径，**只有仍在当前 cwd 扫描结果里的
+才生效**（防跨目录穿越）；拼装块头 `<!-- miyu-purge:cwd-rule <文件名> -->`，块间
+`---`，总长封顶 512KB。注入位置：`<purge-mode>` 段内、`<purge-boost>` 之前。
+CLI `miyu purge rules [--select PATH]... [--clear]`。测试 8 条（7 单元 + 1 Agent 级）。
+
+**M4 审计与备份**（commit `bb8b7df`，已推送）
+
+`<state_dir>/purge-audit.jsonl`，挂在 `AppConfig::save` 上，先读盘上旧 purge 段做
+diff，只记实质变化（开关/名单/规则），改 voice/display 不产出事件；写失败只留
+warning 不推翻保存。`miyu purge edit --reset` 恢复出厂模板并把旧正文备份成
+`purge-inject.md.bak-<时间戳>`。测试 6 条。
+
+**M5 自动续跑**（commit `903d716`，已推送）
+
+挂点在 `finish_without_tools`。三道闸：`auto_continue` 开（**默认关**）、
+轮次 < `continue_max`（默认 3）、队列本来为空（用户的话优先）。计次在
+`RoundState.purge_continue_rounds`，回合内累计、跨回合清零。补的是普通 queued
+prompt（`continue_text`，默认「继续」），复用既有插话链路。事件
+`PurgeAutoContinue{round,max}` → 终端一行提示 + WebUI `purge.auto_continue`。
+门槛逻辑抽成 `should_auto_continue` 纯函数，测试 5 条。
 
 ---
 
@@ -148,15 +173,16 @@ QQ（OneBot 协议）是目前唯一实装的平台：`platforms/onebot/`（disp
 | 出站闸放行 | 补丁拆 net-scope | `bypass_net_guard` | ✅ 对等 |
 | 沙盒直通 | 补丁拆沙箱 | `sandbox_passthrough` | ✅ 对等 |
 | boost 强化段 | 有 | `BOOST_SECTION` 常量 | ✅ 对等 |
-| **自己的服务器白名单** | 有（UI 可编辑） | ❌ 在途 60% | 🔧 本轮正在补 |
-| **规则页**（AGENTS/CLAUDE.md 管理） | 有 | ❌ 无 | 📋 已排（5.1） |
+| **自己的服务器白名单** | 有（UI 可编辑） | ✅ `net_allowlist`（M1，`f0bdf11`） | ✅ 对等 |
+| **规则页**（AGENTS/CLAUDE.md 管理） | 有 | ✅ 读侧完成（M3，`fc5c94f`）；写回侧未做 | 🔶 核心对等 |
 | **技能库管理** | 有 | ❌（miyu 有独立 skills 系统，不经 purge 管） | ➖ 架构不同，可不做 |
 | **演练台**（红队子系统） | 有（10 标签） | ❌ 无 | 📋 已排（5.3，单独立项） |
 | 状态页（补丁统计/版本/更新） | 有 | 文本版 `purge status` | ➖ miyu 零补丁架构不需要 |
-| 审计/快照回滚 | 有 | ❌ 无 | 📋 已排（5.2） |
+| 审计/快照回滚 | 有 | ✅ `purge-audit.jsonl` + `edit --reset`（M4，`bb8b7df`） | ✅ 核心对等 |
 | 自动更新 | 有 | ❌（git 拉取即可） | ➖ 不需要 |
 | 加密槽默认稿 | 有 | ❌ 明文模板 | ➖ 单机场景收益低 |
-| autoRetry / autoContinue | 有 | ❌ 无 | 📋 已排（5.4） |
+| autoContinue | 有 | ✅ 三闸 + 上限 3（M5，`903d716`） | ✅ 对等 |
+| autoRetry | 有 | ❌ 无 | 📋 未排（上层已有重试，purge 层可不做） |
 
 ### 3.2 移植的架构差异（为什么 miyu 不需要 67 条补丁）
 
