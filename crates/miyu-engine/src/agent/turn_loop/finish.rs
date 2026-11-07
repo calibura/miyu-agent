@@ -207,6 +207,16 @@ impl Agent {
         // 排队的 `/compact`（09-25）：模型要收尾了，只压库里的历史，下一轮从库里重建。
         self.run_queued_compact(current_turn_id, messages, st, control, false, on_event)
             .await?;
+        // purge 自动续跑（移植 dsh-purge 的 autoContinue）：
+        // 模型干净收尾、没有工具调用的这一刻，如果开了开关且没到上限，
+        // 往队列里补一句「继续」。下一轮循环读到它就会接着干。
+        //
+        // 只在 control 存在（真回合、不是测试/一次性调用）时做，并且
+        // **队列本来就空**才补——用户自己排的话优先，别插队。
+        if let Some(control) = control {
+            self.maybe_enqueue_purge_continue(current_turn_id, control, st, on_event)
+                .await?;
+        }
         let mut result = result;
         if let Some(usage) = st.usage_accumulator.usage() {
             // 供应商已给出"最后一次请求"的口径(claude-code 中转:
@@ -270,5 +280,44 @@ impl Agent {
             result.usage_estimated = st.usage_accumulator.estimated;
         }
         Ok(result)
+    }
+
+    /// purge 自动续跑：模型干净收尾时补一句「继续」进队列。
+    ///
+    /// 三条前置一起满足才动手：
+    /// 1. `purge.auto_continue` 开着（默认关——续跑烧额度，得用户显式要）；
+    /// 2. 本轮已续跑次数 < `continue_max`（防无限自转）；
+    /// 3. 队列本来是空的（用户自己排的话优先，不插队）。
+    ///
+    /// 计次用 `RoundState` 里的字段而不是落库：续跑是**本轮内**的循环，
+    /// 跨回合不该累计。用户新发一条消息就是新的回合、新的计数。
+    async fn maybe_enqueue_purge_continue<F>(
+        &self,
+        current_turn_id: &str,
+        control: &AgentTurnControl,
+        st: &mut RoundState,
+        on_event: &mut F,
+    ) -> Result<()>
+    where
+        F: FnMut(AgentEvent) -> Result<()>,
+    {
+        let purge = &self.core.config.purge;
+        // 用户已经排了话就不插队——他们的意图优先于自动续跑。
+        let queue_is_empty = self.state.load_queued_prompts()?.is_empty();
+        let round = st.purge_continue_rounds.get();
+        if !purge.should_auto_continue(round, queue_is_empty) {
+            return Ok(());
+        }
+        let text = purge.continue_text.trim();
+        let prompt_id = format!("purge-continue-{current_turn_id}-{}", round + 1);
+        self.state.enqueue_prompt(&prompt_id, text, text, &[])?;
+        st.purge_continue_rounds.set(round + 1);
+        on_event(AgentEvent::PurgeAutoContinue {
+            prompt_id,
+            round: round + 1,
+            max: purge.continue_max,
+        })?;
+        let _ = control;
+        Ok(())
     }
 }

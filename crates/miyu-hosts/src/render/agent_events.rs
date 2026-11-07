@@ -80,6 +80,15 @@ pub fn apply_agent_event(
         event @ AgentEvent::AskQuestion { .. } => return Ok(Some(event)),
         AgentEvent::QueuedPromptsConsumed { .. } => Ok(()),
         AgentEvent::GenerationSuperseded { .. } => Ok(()),
+        // purge 自动续跑:给终端一行提示,让用户知道这轮为什么还没停。
+        AgentEvent::PurgeAutoContinue { round, max, .. } => {
+            let text = format!(
+                "{} {round}/{max}",
+                t("purge auto-continue", "purge 自动续跑")
+            );
+            renderer.write_system_message(&text)?;
+            renderer.tick_spinner()
+        }
         AgentEvent::SpinnerTick => renderer.tick_spinner(),
         AgentEvent::CompactStart => {
             let text = t("Compacting context...", "正在压缩上下文...");

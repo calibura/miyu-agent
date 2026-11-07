@@ -278,6 +278,20 @@ impl TurnJournalSink {
                 )?;
                 on_event(AgentEvent::GenerationSuperseded { prompt_ids })
             }
+            AgentEvent::PurgeAutoContinue {
+                prompt_id,
+                round,
+                max,
+            } => {
+                // 一行可见的痕迹:让用户知道这轮为什么还没停。冲掉积压的
+                // spinner 块,再原样转发给上层 UI。
+                self.flush(on_event)?;
+                on_event(AgentEvent::PurgeAutoContinue {
+                    prompt_id,
+                    round,
+                    max,
+                })
+            }
             AgentEvent::QueuedPromptsConsumed {
                 prompt_ids,
                 mode,

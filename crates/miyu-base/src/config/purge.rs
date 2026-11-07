@@ -56,6 +56,15 @@ pub struct PurgeConfig {
     ///
     /// 默认空 = 不注入任何工作区指令文件。
     pub rule_selections: Vec<String>,
+    /// 自动续跑：模型收尾后自动再发一句「继续」，让它把没说完的活干完。
+    ///
+    /// 移植自 dsh-purge 的 `autoContinue`。默认**关**——自动续跑会消耗额度，
+    /// 而且模型的「说完了」大多数时候就是真的说完了；这是给长任务用的开关。
+    pub auto_continue: bool,
+    /// 续跑上限。到顶就停下，不再自动追加。对照 dsh 的 `continueMax: 3`。
+    pub continue_max: u32,
+    /// 续跑时发的那句话。默认「继续」。
+    pub continue_text: String,
 }
 
 impl Default for PurgeConfig {
@@ -68,6 +77,9 @@ impl Default for PurgeConfig {
             sandbox_passthrough: true,
             boost: true,
             rule_selections: Vec::new(),
+            auto_continue: false,
+            continue_max: 3,
+            continue_text: "继续".to_string(),
         }
     }
 }
@@ -76,6 +88,24 @@ impl PurgeConfig {
     /// 配置里的子开关要不要生效:总开关关着,子开关一律当没写。
     fn effective(&self, bypass: bool) -> bool {
         self.enabled && bypass
+    }
+
+    /// 自动续跑此刻该不该补一句「继续」。
+    ///
+    /// 三条一起满足才动手：总开关与 `auto_continue` 都开、上限没到、队列
+    /// 本来为空（用户自己排的话优先）。抽成纯函数是为了能单独测门槛——
+    /// 真回合测试要拉起模型，门槛逻辑却是纯判断。
+    pub fn should_auto_continue(&self, rounds_done: u32, queue_is_empty: bool) -> bool {
+        if !self.enabled || !self.auto_continue || self.continue_max == 0 {
+            return false;
+        }
+        if self.continue_text.trim().is_empty() {
+            return false;
+        }
+        if !queue_is_empty {
+            return false;
+        }
+        rounds_done < self.continue_max
     }
 
     /// 出站白名单的规范化条目:去空白、去空行、`账号@主机` 只留主机。
@@ -422,5 +452,50 @@ mod tests {
             read_inject_text(dir).as_deref(),
             Some(DEFAULT_INJECT_TEMPLATE.trim())
         );
+    }
+
+    #[test]
+    fn auto_continue_needs_all_three_gates_open() {
+        let mut purge = PurgeConfig {
+            enabled: true,
+            auto_continue: true,
+            ..PurgeConfig::default()
+        };
+        // 全开、队列空、没到上限 → 续跑。
+        assert!(purge.should_auto_continue(0, true));
+        assert!(purge.should_auto_continue(2, true), "上限 3,第 3 次还能补");
+
+        // 到上限 → 停。
+        assert!(!purge.should_auto_continue(3, true));
+
+        // 队列非空 → 用户自己的话优先,不插队。
+        assert!(!purge.should_auto_continue(0, false));
+
+        // 总开关关着 → 子开关无效。
+        purge.enabled = false;
+        assert!(!purge.should_auto_continue(0, true));
+        purge.enabled = true;
+
+        // auto_continue 关着（默认）→ 不续跑。
+        purge.auto_continue = false;
+        assert!(!purge.should_auto_continue(0, true));
+        purge.auto_continue = true;
+
+        // 上限为 0 等于关掉。
+        purge.continue_max = 0;
+        assert!(!purge.should_auto_continue(0, true));
+        purge.continue_max = 3;
+
+        // 续跑正文空白 → 没有可发的内容。
+        purge.continue_text = "   ".to_string();
+        assert!(!purge.should_auto_continue(0, true));
+    }
+
+    #[test]
+    fn auto_continue_defaults_to_off() {
+        let purge = PurgeConfig::default();
+        assert!(!purge.auto_continue, "默认必须关:续跑烧额度");
+        assert_eq!(purge.continue_max, 3);
+        assert_eq!(purge.continue_text, "继续");
     }
 }

@@ -30,6 +30,9 @@ pub(super) struct RoundState {
     pub(super) continuation_context: Option<(usize, Vec<ChatMessage>)>,
     pub(super) repeat_gate: ToolRepeatGate,
     pub(super) repeat_fused: bool,
+    /// purge 自动续跑已经补过几次「继续」（§purge）。回合内累计，跨回合清零
+    /// ——用户新发一条消息就是新回合、新预算。
+    pub(super) purge_continue_rounds: std::cell::Cell<u32>,
 }
 
 impl RoundState {
@@ -54,6 +57,7 @@ impl RoundState {
             continuation_context: None,
             repeat_gate: ToolRepeatGate::new(),
             repeat_fused: false,
+            purge_continue_rounds: std::cell::Cell::new(0),
         }
     }
 }

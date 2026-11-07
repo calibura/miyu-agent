@@ -178,6 +178,14 @@ pub enum AgentEvent {
     GenerationSuperseded {
         prompt_ids: Vec<String>,
     },
+    /// purge 自动续跑补了一条「继续」进队列(§purge,移植 dsh-purge 的
+    /// autoContinue)。终端/WebUI 用它显示一行「已自动续跑 n/max」,
+    /// 让用户知道这轮为什么还没停。
+    PurgeAutoContinue {
+        prompt_id: String,
+        round: u32,
+        max: u32,
+    },
     /// 回合内每次模型请求结束时的用量快照:`round` 是刚结束这次请求的
     /// 用量(其 prompt+completion ≈ 当前上下文占用),`turn` 是回合开始
     /// 至今的累计。终端 footer 和 WebUI 用它逐请求刷新计量,不必等整个
