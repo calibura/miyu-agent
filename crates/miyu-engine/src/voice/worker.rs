@@ -231,7 +231,7 @@ pub fn run_worker() -> Result<()> {
                         return;
                     }
                 }
-        })?;
+            })?;
         Some(service)
     } else {
         if stt_only {
@@ -268,7 +268,11 @@ pub fn run_worker() -> Result<()> {
         .map(|service| service.device_description.clone())
         .unwrap_or_else(|| {
             if stt_only {
-                t("(transcription only, no microphone)", "(纯转写,不占用麦克风)").to_string()
+                t(
+                    "(transcription only, no microphone)",
+                    "(纯转写,不占用麦克风)",
+                )
+                .to_string()
             } else {
                 t("(wake off, playback only)", "(唤醒关闭,仅播报)").to_string()
             }

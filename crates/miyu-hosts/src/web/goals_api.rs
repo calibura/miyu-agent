@@ -170,15 +170,12 @@ pub(in crate::web) async fn goals_overview_http(
     Ok(Json(serde_json::json!({ "goals": items })))
 }
 
-/// 总览一行的 JSON 形态。IPC(`/goals` 的 TUI 侧)与 HTTP 共用的展示函数。
-pub(in crate::web) fn goals_overview_json(rows: &[GoalOverviewRow]) -> Vec<serde_json::Value> {
-    rows.iter()
-        .map(|row| goal_json(&row.record, &row.session_name))
-        .collect()
-}
-
 /// 与 `goal_json` 同形,补上归属。TUI 的总览要看见「这是谁的目标」;WebUI
 /// 侧栏只给自己的帐号,没要这个字段。
+///
+/// 原先还有一个不带 `owner` 的 `goals_overview_json`，注释说「IPC 与 HTTP
+/// 共用」，但两处都只调这个带归属的版本，那个函数从加进来就没被调用过。
+/// 2026-11-07 删掉，dead_code 警告随之消失。
 pub(in crate::web) fn goals_overview_with_owner_json(
     rows: &[GoalOverviewRow],
 ) -> Vec<serde_json::Value> {

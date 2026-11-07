@@ -75,7 +75,8 @@ pub struct VoiceTtsConfig {
     /// 任一开启都会拉起 miyu-voice(唤醒关闭时它只管播放,不开麦克风)。
     #[serde(default)]
     pub enabled: bool,
-    /// 播报供应商:`minimax` | `mimo`(小米 MiMo)| `gptsovits`(本地 GPT-SoVITS);
+    /// 播报供应商:`minimax` | `mimo`(小米 MiMo)| `gptsovits`(本地 GPT-SoVITS)
+    /// | `openai_compat`(OpenAI 兼容 /v1/audio/speech);
     /// None / 空 = 默认 MiniMax。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active: Option<String>,
@@ -91,6 +92,9 @@ pub struct VoiceTtsConfig {
     pub mimo: MimoTtsConfig,
     #[serde(default)]
     pub gptsovits: GptSovitsTtsConfig,
+    /// OpenAI 兼容语音合成(vLLM-Omni / Fish Speech / OpenAI 本尊等)。
+    #[serde(default)]
+    pub openai_compat: OpenAiCompatTtsConfig,
 }
 
 /// 小米 MiMo 语音合成(`mimo-v2.5-tts` 系列,OpenAI 兼容的 `chat/completions`:
@@ -197,6 +201,13 @@ pub struct GptSovitsTtsConfig {
     /// 返回格式:wav | ogg | aac | raw。QQ 语音条走 wav 最稳。
     #[serde(default = "default_gptsovits_media")]
     pub media_type: String,
+    /// 固定参考音频模式:服务端(Aemeath-TTS 这类 ONNX 打包)把参考音频写死,
+    /// 不收 `ref_audio_path`,收到带日语 `prompt_text` 的请求直接 500。开这
+    /// 个开关后请求只带 `text/text_lang/text_split_method/media_type/
+    /// speed_factor/seed` 这些合成参数,参考音频相关字段全部不发;
+    /// `has_key()` 也不再要求填 `ref_audio_path`。
+    #[serde(default)]
+    pub fixed_ref: bool,
 }
 
 fn default_gptsovits_base_url() -> String {
@@ -229,6 +240,7 @@ impl Default for GptSovitsTtsConfig {
             aux_ref_audio_paths: Vec::new(),
             speed_factor: 1.0,
             media_type: default_gptsovits_media(),
+            fixed_ref: false,
         }
     }
 }
@@ -237,7 +249,63 @@ impl GptSovitsTtsConfig {
     /// 自托管服务没有 key:填了地址就算配好,但参考音频是硬要求 ——
     /// 没有参考音频 GPT-SoVITS 根本不知道怎么发音色。
     pub fn has_key(&self) -> bool {
-        !self.base_url.trim().is_empty() && !self.ref_audio_path.trim().is_empty()
+        !self.base_url.trim().is_empty()
+            && (self.fixed_ref || !self.ref_audio_path.trim().is_empty())
+    }
+}
+
+/// OpenAI 兼容语音合成:`POST {base_url}/audio/speech`,请求
+/// `{model, input, voice, response_format}`,成功回裸音频字节。vLLM-Omni、
+/// Fish Speech、GPT-SoVITS 桥接器、OpenAI 本尊都讲这个形状。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct OpenAiCompatTtsConfig {
+    /// API key;自托管(vLLM 等)多半没有,留空即可。支持 `$env:VAR` 引用。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    /// 服务地址,含到 `/v1` 这一级,如 `http://127.0.0.1:8000/v1`。
+    #[serde(default)]
+    pub base_url: String,
+    /// 模型名,如 `openai/tts-1`、`fishaudio/fish-speech-1.5`。
+    #[serde(default = "default_openai_compat_model")]
+    pub model: String,
+    /// 音色:OpenAI 形状没有音色列表接口,自由文本(`alloy`、`fish`……)。
+    #[serde(default = "default_openai_compat_voice")]
+    pub voice: String,
+    /// 语速 0.25~4.0,不支持的端点会忽略。
+    #[serde(default = "default_unit")]
+    pub speed: f32,
+    /// 请求超时(秒)。本地引擎首次推理要加载权重,给宽一点。
+    #[serde(default = "default_openai_compat_timeout")]
+    pub timeout_seconds: u64,
+}
+
+fn default_openai_compat_model() -> String {
+    "tts-1".to_string()
+}
+fn default_openai_compat_voice() -> String {
+    "alloy".to_string()
+}
+fn default_openai_compat_timeout() -> u64 {
+    120
+}
+
+impl Default for OpenAiCompatTtsConfig {
+    fn default() -> Self {
+        Self {
+            api_key: None,
+            base_url: String::new(),
+            model: default_openai_compat_model(),
+            voice: default_openai_compat_voice(),
+            speed: 1.0,
+            timeout_seconds: default_openai_compat_timeout(),
+        }
+    }
+}
+
+impl OpenAiCompatTtsConfig {
+    /// 填了地址就算配好:key 对自托管是可选项。
+    pub fn has_key(&self) -> bool {
+        !self.base_url.trim().is_empty()
     }
 }
 
@@ -246,6 +314,7 @@ pub const TTS_PROVIDERS: &[(&str, &str)] = &[
     ("minimax", "MiniMax"),
     ("mimo", "Xiaomi MiMo"),
     ("gptsovits", "GPT-SoVITS"),
+    ("openai_compat", "OpenAI 兼容"),
 ];
 
 /// MiniMax `t2a_v2` 播报配置。
@@ -311,6 +380,7 @@ impl Default for VoiceTtsConfig {
             minimax: MiniMaxTtsConfig::default(),
             mimo: MimoTtsConfig::default(),
             gptsovits: GptSovitsTtsConfig::default(),
+            openai_compat: OpenAiCompatTtsConfig::default(),
         }
     }
 }
@@ -355,6 +425,7 @@ impl VoiceTtsConfig {
             "minimax" => self.minimax.has_key(),
             "mimo" => self.mimo.has_key(),
             "gptsovits" => self.gptsovits.has_key(),
+            "openai_compat" => self.openai_compat.has_key(),
             _ => false,
         }
     }

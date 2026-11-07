@@ -2649,4 +2649,12 @@ window.MIYU_I18N_EN = Object.freeze({
   "低": "Low",
   "目标进度 QQ 推送": "Goal progress via QQ",
   "goal 自动续轮每轮结束后向第一个管理员私聊推送一句简短进度": "Send a short progress line to the first admin in private chat after each goal round ends",
+  "OpenAI 兼容": "OpenAI-compatible",
+  "OpenAI 形状没有音色列表接口,按服务端支持的名字填": "The OpenAI shape has no voice-list endpoint; use whatever name the server supports",
+  "vLLM-Omni、Fish Speech、OpenAI 等兼容 /v1/audio/speech 的服务": "vLLM-Omni, Fish Speech, OpenAI, or any server speaking /v1/audio/speech",
+  "如 tts-1、fishaudio/fish-speech-1.5、vllm-omni 暴露的名字": "e.g. tts-1, fishaudio/fish-speech-1.5, or the name your vLLM-Omni exposes",
+  "接口地址(含 /v1)": "Base URL (incl. /v1)",
+  "本地引擎首次推理要加载权重,给足": "The first local inference loads the weights, so leave headroom",
+  "自托管可空;支持 $env:VAR 引用": "Optional for self-hosted; supports $env:VAR references",
+  "音色(自由填写)": "Voice (free text)",
 });

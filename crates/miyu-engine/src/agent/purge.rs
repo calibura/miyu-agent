@@ -37,8 +37,12 @@ impl PurgeInjection {
         }
     }
 
-    /// 测试与显式正文路径:拿给定的注入正文折段体(不读盘)。
-    #[cfg(any(test, feature = "testkit"))]
+    /// 测试用:拿给定的注入正文折段体(不读盘)。
+    ///
+    /// 只给本文件的 `mod tests` 用。原先挂着 `feature = "testkit"`，于是
+    /// lib 构建（上游 crate 打开 testkit 时）也会编进来，而那时没人调它
+    /// —— dead_code 警告就是这么来的。收窄成 `#[cfg(test)]` 即可。
+    #[cfg(test)]
     pub(in crate::agent) fn from_text(config: &miyu_base::config::AppConfig, text: &str) -> Self {
         let flags = miyu_base::config::PurgeFlags::resolve(&config.purge, text);
         Self {

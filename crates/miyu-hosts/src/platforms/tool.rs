@@ -147,11 +147,11 @@ fn register_voice_message(registry: &mut ToolRegistry, context: Arc<PlatformTurn
     registry.register(
         ToolSpec::new(
             "send_voice_message",
-            "Send the given text as a spoken voice message (text-to-speech) to the current messaging-platform conversation.",
+            "Send the given text as a spoken voice message (text-to-speech) to the current messaging-platform conversation. Pass the FULL content the user asked for verbatim, converted to natural spoken language - do not summarize, truncate, or replace it with a promise to speak. Long text is fine: it is split into sentences and synthesized automatically.",
             json!({
                 "type": "object",
                 "properties": {
-                    "text": { "type": "string", "description": "What to say, in natural spoken language (a few sentences at most)." }
+                    "text": { "type": "string", "description": "The complete spoken text, including every point the user asked to hear. Natural spoken language, any length." }
                 },
                 "required": ["text"],
                 "additionalProperties": false

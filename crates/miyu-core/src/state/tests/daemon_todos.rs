@@ -4,7 +4,6 @@
 //! (空内容、越权优先级/状态),以及 completed_at 与 status 永不自相矛盾。
 
 use super::shared::*;
-use crate::state::*;
 
 #[test]
 fn daemon_todo_crud_roundtrip() {

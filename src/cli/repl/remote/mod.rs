@@ -15,5 +15,8 @@ mod submit;
 mod visit;
 pub(in crate::cli) use interactive::*;
 pub(in crate::cli) use one_shot::*;
+// 测试(slash_commands.rs)直接调 render_skills 验渲染结果;生产路径用不到,
+// 所以只在测试构建下导出,免得又挂一条 unused 警告。
+#[cfg(test)]
 pub(in crate::cli) use slash_session::render_skills;
 pub(in crate::cli) use subagent_follow::follow_subagent_reports;

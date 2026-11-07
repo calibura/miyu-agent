@@ -22,17 +22,7 @@ use miyu_hosts::web::voice_tts::{MIMO_MODELS, MIMO_VOICES};
 /// 自动切语种;`all_*` 强制整段按该语种处理。混着英文的文本用 `zh` 时
 /// 容易在切分点失败(实测含 "GPT-SoVITS" 这样的词会 400),`all_zh` 更稳。
 const GPTSOVITS_LANGS: &[&str] = &[
-    "zh",
-    "all_zh",
-    "en",
-    "ja",
-    "all_ja",
-    "ko",
-    "all_ko",
-    "yue",
-    "all_yue",
-    "auto",
-    "auto_yue",
+    "zh", "all_zh", "en", "ja", "all_ja", "ko", "all_ko", "yue", "all_yue", "auto", "auto_yue",
 ];
 
 /// GPT-SoVITS 的切句方式。短句用 cut5,长文用 cut3 更稳。
@@ -238,7 +228,11 @@ fn provider_summary(tts: &VoiceTtsConfig, provider: &str) -> String {
     if !tts.provider_has_key(provider) {
         // 自托管的那家没有 key,缺的是参考音频,别误导成「去填 key」。
         return if provider == "gptsovits" {
-            t("no reference audio yet", "未填参考音频").to_string()
+            if tts.gptsovits.fixed_ref {
+                t("server built-in voice", "服务端内置音色").to_string()
+            } else {
+                t("no reference audio yet", "未填参考音频").to_string()
+            }
         } else {
             t("no api key yet", "未填 key").to_string()
         };
@@ -266,6 +260,10 @@ fn provider_summary(tts: &VoiceTtsConfig, provider: &str) -> String {
                 cfg.voice.clone()
             };
             format!("{} · {voice}", cfg.model)
+        }
+        "openai_compat" => {
+            let cfg = &tts.openai_compat;
+            format!("{} · {}", cfg.model, cfg.voice)
         }
         _ => format!("{} · {}", tts.minimax.model, tts.minimax.voice_id),
     }
@@ -394,6 +392,7 @@ fn edit_tts_providers(ui: &mut Ui, paths: &MiyuPaths, config: &mut AppConfig) ->
                 let outcome = match provider {
                     "mimo" => edit_mimo(ui, paths, config),
                     "gptsovits" => edit_gptsovits(ui, paths, config),
+                    "openai_compat" => edit_openai_compat(ui, paths, config),
                     _ => edit_minimax(ui, paths, config),
                 };
                 if let Err(error) = outcome {
@@ -666,10 +665,7 @@ fn edit_gptsovits_connection(ui: &mut Ui, config: &mut AppConfig) -> Result<()> 
     ];
     run_form_without_buttons(
         ui,
-        t(
-            " GPT-SoVITS CONNECTION ",
-            " GPT-SoVITS 连接与参考音频 ",
-        ),
+        t(" GPT-SoVITS CONNECTION ", " GPT-SoVITS 连接与参考音频 "),
         &mut fields,
     )?;
     let tts = &mut config.voice.tts;
@@ -692,13 +688,22 @@ fn edit_gptsovits_splitting(ui: &mut Ui, config: &mut AppConfig) -> Result<()> {
     let cfg = config.voice.tts.gptsovits.clone();
     let mut fields = vec![
         Field::new(t("Text language", "文本语言"), cfg.text_lang.clone()).choices(GPTSOVITS_LANGS),
-        Field::new(t("Prompt language", "参考音频语言"), cfg.prompt_lang.clone())
-            .choices(GPTSOVITS_LANGS),
+        Field::new(
+            t("Prompt language", "参考音频语言"),
+            cfg.prompt_lang.clone(),
+        )
+        .choices(GPTSOVITS_LANGS),
         Field::new(t("Split method", "切句方式"), cfg.text_split_method.clone())
             .choices(GPTSOVITS_SPLITS),
         // 本地首次推理要加载 GPT + SoVITS 权重,默认给足 180 秒。
-        Field::new(t("Timeout (seconds)", "超时(秒)"), cfg.timeout_seconds.to_string()),
-        Field::new(t("Speed factor (0.5-2.0)", "语速倍率(0.5-2.0)"), cfg.speed_factor.to_string()),
+        Field::new(
+            t("Timeout (seconds)", "超时(秒)"),
+            cfg.timeout_seconds.to_string(),
+        ),
+        Field::new(
+            t("Speed factor (0.5-2.0)", "语速倍率(0.5-2.0)"),
+            cfg.speed_factor.to_string(),
+        ),
     ];
     run_form_without_buttons(
         ui,
@@ -712,6 +717,131 @@ fn edit_gptsovits_splitting(ui: &mut Ui, config: &mut AppConfig) -> Result<()> {
     let timeout = fields[3].value.trim().parse::<u64>()?;
     tts.gptsovits.timeout_seconds = if timeout == 0 { 180 } else { timeout };
     tts.gptsovits.speed_factor = fields[4].value.trim().parse::<f32>()?.clamp(0.5, 2.0);
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// OpenAI 兼容
+// ---------------------------------------------------------------------------
+
+/// OpenAI 兼容播报配置菜单。
+fn edit_openai_compat(ui: &mut Ui, paths: &MiyuPaths, config: &mut AppConfig) -> Result<()> {
+    let mut selected = 0usize;
+    loop {
+        let cfg = &config.voice.tts.openai_compat;
+        let key_state = if cfg
+            .api_key
+            .as_deref()
+            .is_some_and(|key| !key.trim().is_empty())
+        {
+            t("key set", "已填key").to_string()
+        } else {
+            t("no key (ok for self-hosted)", "无key(自托管可)").to_string()
+        };
+        let options = [
+            format!(
+                "{} ({} · {} · {} · {})",
+                t("Connection, model and voice", "连接、模型与音色"),
+                if cfg.base_url.trim().is_empty() {
+                    t("no address", "未填地址").to_string()
+                } else {
+                    cfg.base_url.trim().to_string()
+                },
+                key_state,
+                cfg.model.trim(),
+                cfg.voice.trim()
+            ),
+            format!(
+                "{} ({} {}s · {} {})",
+                t("Timeout and speed", "超时与语速"),
+                t("timeout", "超时"),
+                cfg.timeout_seconds,
+                t("speed", "语速"),
+                cfg.speed
+            ),
+            t("Preview", "试听").to_string(),
+        ];
+        draw_menu(
+            ui,
+            " OpenAI 兼容 ",
+            &options,
+            selected,
+            t("[Enter]open [q]back", "[Enter]进入 [q]返回"),
+        )?;
+        match read_key(ui)? {
+            KeyCode::Esc | KeyCode::Char('q') => return Ok(()),
+            KeyCode::Up | KeyCode::Char('k') => selected = selected.saturating_sub(1),
+            KeyCode::Down | KeyCode::Char('j') => selected = (selected + 1).min(options.len() - 1),
+            KeyCode::Enter => {
+                let outcome = match selected {
+                    0 => edit_openai_compat_connection(ui, config),
+                    1 => edit_openai_compat_tuning(ui, config),
+                    _ => preview_tts(paths, &config.voice.tts, "openai_compat", None),
+                };
+                if let Err(error) = outcome {
+                    show_tui_error(ui, &error)?;
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn edit_openai_compat_connection(ui: &mut Ui, config: &mut AppConfig) -> Result<()> {
+    let cfg = config.voice.tts.openai_compat.clone();
+    let mut fields = vec![
+        Field::new(
+            t("Base URL (incl. /v1)", "接口地址(含 /v1)"),
+            cfg.base_url.clone(),
+        ),
+        Field::new(
+            t(
+                "API key (optional for self-hosted, $env:VAR ok)",
+                "API key(自托管可空,支持 $env:VAR)",
+            ),
+            cfg.api_key.clone().unwrap_or_default(),
+        )
+        .sensitive(),
+        Field::new(t("Model", "模型名"), cfg.model.clone()),
+        // OpenAI 形状没有音色列表接口,音色是自由文本。
+        Field::new(t("Voice (free text)", "音色(自由填写)"), cfg.voice.clone()),
+    ];
+    run_form_without_buttons(
+        ui,
+        t(" OPENAI-COMPAT CONNECTION ", " OpenAI 兼容连接 "),
+        &mut fields,
+    )?;
+    let tts = &mut config.voice.tts;
+    tts.openai_compat.base_url = fields[0].value.trim().to_string();
+    let key = fields[1].value.trim().to_string();
+    tts.openai_compat.api_key = if key.is_empty() { None } else { Some(key) };
+    tts.openai_compat.model = fields[2].value.trim().to_string();
+    tts.openai_compat.voice = fields[3].value.trim().to_string();
+    adopt_provider_if_current_unusable(tts, "openai_compat");
+    Ok(())
+}
+
+fn edit_openai_compat_tuning(ui: &mut Ui, config: &mut AppConfig) -> Result<()> {
+    let cfg = config.voice.tts.openai_compat.clone();
+    let mut fields = vec![
+        Field::new(
+            t("Speed (0.25-4.0)", "语速(0.25-4.0)"),
+            cfg.speed.to_string(),
+        ),
+        // 本地引擎首次推理要加载权重,默认给足。
+        Field::new(
+            t("Timeout (seconds)", "超时(秒)"),
+            cfg.timeout_seconds.to_string(),
+        ),
+    ];
+    run_form_without_buttons(
+        ui,
+        t(" OPENAI-COMPAT TUNING ", " OpenAI 兼容调参 "),
+        &mut fields,
+    )?;
+    let tts = &mut config.voice.tts;
+    tts.openai_compat.speed = fields[0].value.trim().parse::<f32>()?.clamp(0.25, 4.0);
+    tts.openai_compat.timeout_seconds = fields[1].value.trim().parse::<u64>()?.max(5);
     Ok(())
 }
 
