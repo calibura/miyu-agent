@@ -83,6 +83,7 @@ use dashboards::memes::*;
 use dashboards::memory::*;
 use dashboards::qq::*;
 use dashboards::scripts::*;
+use dashboards::skills::*;
 use dashboards::sponsor::*;
 use dto::*;
 use event_map::*;

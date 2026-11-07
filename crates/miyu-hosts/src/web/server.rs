@@ -613,6 +613,11 @@ pub(in crate::web) fn router(state: DaemonState) -> Router {
         .route("/api/dash/scripts/personas", get(dash_scripts_personas))
         .route("/api/dash/scripts/overview", get(dash_scripts_overview))
         .route("/api/dash/scripts/source", get(dash_scripts_source))
+        // 技能面板：清单与正文走 discover（与模型同一可见性口径）。
+        .route("/api/dash/skills/overview", get(dash_skills_overview))
+        .route("/api/dash/skills/source", get(dash_skills_source))
+        .route("/api/dash/skills/enable", post(dash_skills_enable))
+        .route("/api/dash/skills/disable", post(dash_skills_disable))
         .route("/api/dash/scripts/enable", post(dash_scripts_enable))
         .route("/api/dash/scripts/disable", post(dash_scripts_disable))
         .route(

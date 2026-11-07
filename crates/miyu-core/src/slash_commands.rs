@@ -59,6 +59,7 @@ pub enum ReplSlashCommand {
     Stt,
     Goal,
     Goals,
+    Skills,
     Reset,
     ResetMemory,
     ResetAllMemory,
@@ -326,6 +327,16 @@ pub const REPL_COMMAND_TABLE: &[ReplCommandSpec] = &[
         web: false,
     },
     ReplCommandSpec {
+        name: "/skills",
+        aliases: &[],
+        command: ReplSlashCommand::Skills,
+        arg_hint: "",
+        help_en: "list the skills the model can see right now (same visibility as its <available-skills> catalog)",
+        help_zh: "列出模型当前能看到的技能（与它拿到的 <available-skills> 目录同口径）",
+        // WebUI 另有技能面板（侧栏「技能」），这里是终端里的对应入口。
+        web: true,
+    },
+    ReplCommandSpec {
         name: "/reset",
         // `/clear` 就是 `/reset`（用户 09-24：功能相同）。它原来是清屏，清屏还有
         // Ctrl+L；别处的提示（压缩打转时「或使用 /clear 重新开始」）说的一直是这个意思。
@@ -547,7 +558,7 @@ pub fn during_turn(command: ReplSlashCommand, args: &str) -> DuringTurn {
         // 要占屏的面板；`/effort <档位>` 带参数不弹面板，但仍走同一条路。
         Effort | Models | Persona | Config => DuringTurn::Detach,
         // 长文（超过 2 行就落回正文缓冲，回合中写缓冲会写坏正在开的块）。
-        Help | Usage | History | Goals => DuringTurn::Detach,
+        Help | Usage | History | Goals | Skills => DuringTurn::Detach,
         // 一条 IPC + 浮层，不占屏，但实现在 `RemoteRepl` 上（见上）。
         Rename | Sandbox | Stt => DuringTurn::Detach,
         // 退出：Ctrl+D 本来就能在回合中退（回合留在 daemon 里继续跑），

@@ -590,6 +590,54 @@ impl RemoteRepl {
         repl_note(&mut self.live_repl, &render_goals_overview(&goals))?;
         Ok(LoopStep::Continue)
     }
+
+    /// `/skills`：列出模型当前能看到的技能。
+    ///
+    /// 走 `miyu_core::skills::discover`——和模型拿到的 `<available-skills>`
+    /// 目录同一条路。早先终端里只能 `miyu skills list`，那条路只扫目录、不过
+    /// 白名单与人格门，会把模型根本碰不到的技能也列出来；`/skills` 按模型
+    /// 视角渲染，看到的「有」就是「能用」。
+    pub(super) async fn cmd_skills(&mut self) -> Result<LoopStep> {
+        let entries = miyu_core::skills::discover(&self.config, &self.paths)
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+        repl_note(&mut self.live_repl, &render_skills(&entries))?;
+        Ok(LoopStep::Continue)
+    }
+}
+
+/// `/skills` 的清单。每行：名字 / 来源 / 摘要；按（来源, 名字）排，全局在前。
+fn render_skills(entries: &[miyu_core::skills::SkillEntry]) -> String {
+    if entries.is_empty() {
+        return "\x1b[2m◎ 当前视角下一个技能都没有。看看 skills.enabled 与人格清单。\x1b[0m\n"
+            .to_string();
+    }
+    let mut rows = entries
+        .iter()
+        .map(|entry| {
+            (
+                entry.source.as_str(),
+                entry.metadata.name.as_str(),
+                entry.metadata.ui_summary(),
+            )
+        })
+        .collect::<Vec<_>>();
+    rows.sort_by(|a, b| (a.0, a.1).cmp(&(b.0, b.1)));
+    let mut out = format!(
+        "\x1b[2m◎ 模型当前可见 {} 个技能（与 <available-skills> 同口径）\x1b[0m\n",
+        rows.len()
+    );
+    for (source, name, summary) in rows {
+        // 名字定宽 24，够放 `webshell-toolkit` 这类长的；超了截断不换行。
+        let label = if name.chars().count() > 24 {
+            format!("{}…", name.chars().take(23).collect::<String>())
+        } else {
+            name.to_string()
+        };
+        out.push_str(&format!(
+            "  \x1b[36m{label:<24}\x1b[0m \x1b[2m[{source}]\x1b[0m {summary}\n"
+        ));
+    }
+    out
 }
 
 /// `/goals` 的表格。暗色注释体(与命令回执一族),每行:会话名 / 阶段 /
