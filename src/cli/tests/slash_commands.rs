@@ -9,6 +9,25 @@ fn reset_is_a_repl_command() {
     assert!(repl_commands().contains(&"/reset"));
 }
 
+/// `/skills` 必须能被解析成斜杠命令，并且渲染出真实清单。
+///
+/// 这条钉住的是「TUI 里敲 /skills 有反应」：之前只有 WebUI 面板能看技能，
+/// 终端里敲 /skills 会落到 `parse_repl_input` 的 Chat 分支被当成聊天发出去
+/// （模型会回一句「我没有 skills 命令」）。渲染也要有内容——只返回空串同样
+/// 是「无反应」。
+#[test]
+fn skills_is_a_repl_command_with_a_rendered_catalog() {
+    use miyu_core::slash_commands::{repl_command_spec_for_name, ReplSlashCommand};
+
+    let spec = repl_command_spec_for_name("/skills").expect("/skills is a command");
+    assert_eq!(spec.command, ReplSlashCommand::Skills);
+    assert!(spec.arg_hint.is_empty(), "不接受参数");
+
+    // 空库也要有一句说明，不能是空串（空白 == 用户看到的「无反应」）。
+    let empty = crate::cli::repl::remote::render_skills(&[]);
+    assert!(!empty.trim().is_empty(), "空态也要有一句说明");
+}
+
 /// `/clear` 就是 `/reset`（用户 09-24）：终端、直连道、网页都按命令表认它。
 /// 退回修复前这条会红：`/clear` 是另一条命令（清屏）。
 #[test]

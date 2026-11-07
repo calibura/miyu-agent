@@ -600,13 +600,18 @@ impl RemoteRepl {
     pub(super) async fn cmd_skills(&mut self) -> Result<LoopStep> {
         let entries = miyu_core::skills::discover(&self.config, &self.paths)
             .map_err(|error| anyhow::anyhow!("{error}"))?;
-        repl_note(&mut self.live_repl, &render_skills(&entries))?;
+        // 逐行走输出流,不走 `repl_note`。`repl_note` 在屏幕启用时走 toast,
+        // 而 toast 是一行浮层、会被挤掉;技能清单是几十行,必须落进滚动区。
+        // `/goals` 走 repl_note 是因为它通常只有一两行,这里不一样。
+        let text = render_skills(&entries);
+        self.live_repl
+            .apply_output_frame(format!("{text}").as_bytes())?;
         Ok(LoopStep::Continue)
     }
 }
 
 /// `/skills` 的清单。每行：名字 / 来源 / 摘要；按（来源, 名字）排，全局在前。
-fn render_skills(entries: &[miyu_core::skills::SkillEntry]) -> String {
+pub(in crate::cli) fn render_skills(entries: &[miyu_core::skills::SkillEntry]) -> String {
     if entries.is_empty() {
         return "\x1b[2m◎ 当前视角下一个技能都没有。看看 skills.enabled 与人格清单。\x1b[0m\n"
             .to_string();

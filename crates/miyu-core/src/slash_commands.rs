@@ -333,8 +333,9 @@ pub const REPL_COMMAND_TABLE: &[ReplCommandSpec] = &[
         arg_hint: "",
         help_en: "list the skills the model can see right now (same visibility as its <available-skills> catalog)",
         help_zh: "列出模型当前能看到的技能（与它拿到的 <available-skills> 目录同口径）",
-        // WebUI 另有技能面板（侧栏「技能」），这里是终端里的对应入口。
-        web: true,
+        // WebUI 有专门的技能面板（侧栏「技能」，带表格/搜索/抽屉/禁用），
+        // 命令入口不开：两处做同一件事要各自维护一套渲染。
+        web: false,
     },
     ReplCommandSpec {
         name: "/reset",

@@ -15,4 +15,5 @@ mod submit;
 mod visit;
 pub(in crate::cli) use interactive::*;
 pub(in crate::cli) use one_shot::*;
+pub(in crate::cli) use slash_session::render_skills;
 pub(in crate::cli) use subagent_follow::follow_subagent_reports;
