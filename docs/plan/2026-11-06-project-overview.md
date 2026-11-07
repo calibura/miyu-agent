@@ -99,10 +99,7 @@ QQ（OneBot 协议）是目前唯一实装的平台：`platforms/onebot/`（disp
 
 ### 2.2 在途（工作区有代码，未提交）
 
-| 任务 | 状态 | 卡在哪 |
-| --- | --- | --- |
-| voice 半成品 | 40% | 冻在 `stash@{0}`、`stash@{1}`；pop 会与 purge 面板在
-`web/i18n-en.js`、`web/settings-schema.js` 轻微冲突（行区间不相邻，大概率自动合并） |
+**当前没有在途任务**——voice 半成品已在 2026-11-07 收尾（见 2.2.2）。
 
 ### 2.2.1 已完成里程碑 M1：出站白名单（commit `f0bdf11`，已推送）
 
@@ -197,6 +194,29 @@ commit `2aba0e1` + 修复 `d863f7d`。WebUI 侧栏「技能」面板（表格/�
 `/skills` 的输出第一版塞进了 `repl_note`，而那层走 toast、上限 **2 行**
 （`tail/screen/toast.rs:35` 的 `MAX_TOAST_LINES`）——26 行清单直接不显示。
 改成 `apply_output_frame` 落滚动区。
+
+### 2.2.2 已完成里程碑 M9：voice 半成品收尾（commit `69bfe2b`）
+
+2026-11-06 暂存的两份 stash（voice-wip / voice-wip-2）全部落地：
+
+- **GPT-SoVITS `fixed_ref`**：固定参考音频模式，Aemeath-TTS 这类打包服务
+  收到 `ref_audio_path` 会 500，开了开关一个参考字段都不发；「配好了」的
+  判据放宽成 `fixed_ref || 填了路径`。
+- **`openai_compat` TTS**：OpenAI 兼容 `/v1/audio/speech`（vLLM-Omni、
+  Fish Speech、OpenAI 均可），请求 wav 拿回裸字节。设置页 / 配置 TUI /
+  技能摘要三处接线。
+- **sanitize 断句改版**：段落边界补句号（已有句读不重复）；孤立 `</speak>`
+  剥掉后行首句读也剥掉，不留「。剩下的话」这种残渣。
+
+挂着的三条红测试全部修绿：
+1. `gptsovits_fixed_ref_strips_reference_fields` 的反例断言拿填了路径的
+   夹具当反例——换成真反例；
+2. 孤立标签剥完留行首句号——实现层剥行首句读；
+3. `sanitizes_markdown_for_speech` 旧断言还是空格分隔——按新行为更新。
+
+顺手把 workspace 的 warning 清到**零**：删掉从未被调用的
+`goals_overview_json`、把 `PurgeInjection::from_text` 的 testkit 分支
+收窄成 `#[cfg(test)]`、清两个 unused import / re-export。
 
 ---
 
